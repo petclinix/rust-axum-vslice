@@ -23,6 +23,22 @@ pub enum DayOfWeek {
     Sunday,
 }
 
+impl From<time::Weekday> for DayOfWeek {
+    /// Cross-slice: `appointments::slots::derive_free_slots` needs to turn a
+    /// calendar `Date` into the `DayOfWeek` its weekly schedule is keyed by.
+    fn from(weekday: time::Weekday) -> Self {
+        match weekday {
+            time::Weekday::Monday => DayOfWeek::Monday,
+            time::Weekday::Tuesday => DayOfWeek::Tuesday,
+            time::Weekday::Wednesday => DayOfWeek::Wednesday,
+            time::Weekday::Thursday => DayOfWeek::Thursday,
+            time::Weekday::Friday => DayOfWeek::Friday,
+            time::Weekday::Saturday => DayOfWeek::Saturday,
+            time::Weekday::Sunday => DayOfWeek::Sunday,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AvailabilitySlot {
     pub id: Uuid,
@@ -123,6 +139,18 @@ pub fn find_exception_by_date(
 mod tests {
     use super::*;
     use time::macros::{date, time};
+
+    #[test]
+    fn day_of_week_from_time_weekday_matches_by_name() {
+        assert_eq!(DayOfWeek::from(time::Weekday::Monday), DayOfWeek::Monday);
+        assert_eq!(DayOfWeek::from(time::Weekday::Sunday), DayOfWeek::Sunday);
+        // A known calendar date's weekday resolves to the right variant —
+        // 2026-09-07 is a Monday.
+        assert_eq!(
+            DayOfWeek::from(date!(2026 - 09 - 07).weekday()),
+            DayOfWeek::Monday
+        );
+    }
 
     fn sample_slot(vet_id: Uuid) -> AvailabilitySlot {
         AvailabilitySlot {

@@ -8,6 +8,11 @@ pub struct Config {
     pub port: u16,
     pub data_dir: PathBuf,
     pub jwt_secret: String,
+    /// How far in advance an appointment must sit before it can be
+    /// cancelled (PLAN.md §8, "cutoff-gated").
+    pub cancellation_cutoff_hours: i64,
+    /// Used when a booking request omits `duration_minutes`.
+    pub appointment_default_duration_min: i64,
 }
 
 impl Config {
@@ -27,10 +32,22 @@ impl Config {
         let jwt_secret = std::env::var("JWT_SECRET")
             .unwrap_or_else(|_| "insecure-dev-secret-change-me".to_string());
 
+        let cancellation_cutoff_hours = std::env::var("CANCELLATION_CUTOFF_HOURS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(24);
+
+        let appointment_default_duration_min = std::env::var("APPOINTMENT_DEFAULT_DURATION_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
         Self {
             port,
             data_dir,
             jwt_secret,
+            cancellation_cutoff_hours,
+            appointment_default_duration_min,
         }
     }
 }
@@ -45,6 +62,8 @@ impl Config {
             port: 0,
             data_dir,
             jwt_secret: "test-secret".to_string(),
+            cancellation_cutoff_hours: 24,
+            appointment_default_duration_min: 30,
         }
     }
 }

@@ -28,6 +28,15 @@ pub enum AppError {
     #[error("not found: {0}")]
     NotFound(String),
 
+    #[error("requested slot is not available")]
+    SlotUnavailable,
+
+    #[error("invalid status transition: {0}")]
+    InvalidTransition(String),
+
+    #[error("cancellation cutoff has passed")]
+    CancellationCutoffPassed,
+
     #[error("invalid request: {0}")]
     Validation(String),
 
@@ -53,6 +62,9 @@ impl AppError {
             AppError::Unauthenticated => "UNAUTHENTICATED",
             AppError::Forbidden(_) => "FORBIDDEN",
             AppError::NotFound(_) => "NOT_FOUND",
+            AppError::SlotUnavailable => "SLOT_UNAVAILABLE",
+            AppError::InvalidTransition(_) => "INVALID_TRANSITION",
+            AppError::CancellationCutoffPassed => "CANCELLATION_CUTOFF_PASSED",
             AppError::Validation(_) => "VALIDATION_ERROR",
             AppError::Storage(_) => "STORAGE_ERROR",
             AppError::Internal => "INTERNAL_ERROR",
@@ -67,6 +79,9 @@ impl AppError {
             AppError::Unauthenticated => StatusCode::UNAUTHORIZED,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::SlotUnavailable => StatusCode::CONFLICT,
+            AppError::InvalidTransition(_) => StatusCode::CONFLICT,
+            AppError::CancellationCutoffPassed => StatusCode::CONFLICT,
             AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::Storage(_) | AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
