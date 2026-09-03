@@ -19,6 +19,15 @@ pub enum AppError {
     #[error("account is deactivated")]
     AccountDeactivated,
 
+    #[error("authentication required")]
+    Unauthenticated,
+
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("not found: {0}")]
+    NotFound(String),
+
     #[error("invalid request: {0}")]
     Validation(String),
 
@@ -41,6 +50,9 @@ impl AppError {
             AppError::EmailTaken => "EMAIL_TAKEN",
             AppError::InvalidCredentials => "INVALID_CREDENTIALS",
             AppError::AccountDeactivated => "ACCOUNT_DEACTIVATED",
+            AppError::Unauthenticated => "UNAUTHENTICATED",
+            AppError::Forbidden(_) => "FORBIDDEN",
+            AppError::NotFound(_) => "NOT_FOUND",
             AppError::Validation(_) => "VALIDATION_ERROR",
             AppError::Storage(_) => "STORAGE_ERROR",
             AppError::Internal => "INTERNAL_ERROR",
@@ -52,6 +64,9 @@ impl AppError {
             AppError::EmailTaken => StatusCode::CONFLICT,
             AppError::InvalidCredentials => StatusCode::UNAUTHORIZED,
             AppError::AccountDeactivated => StatusCode::FORBIDDEN,
+            AppError::Unauthenticated => StatusCode::UNAUTHORIZED,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::Storage(_) | AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }

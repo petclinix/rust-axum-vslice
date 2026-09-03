@@ -49,8 +49,12 @@ fn user_path(data_dir: &Path, id: Uuid) -> PathBuf {
     users_dir(data_dir).join(format!("{id}.json"))
 }
 
+fn owners_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("owners")
+}
+
 fn owner_path(data_dir: &Path, id: Uuid) -> PathBuf {
-    data_dir.join("owners").join(format!("{id}.json"))
+    owners_dir(data_dir).join(format!("{id}.json"))
 }
 
 fn vet_path(data_dir: &Path, id: Uuid) -> PathBuf {
@@ -78,6 +82,15 @@ pub fn find_user_by_email(data_dir: &Path, email: &str) -> io::Result<Option<Use
 
 pub fn write_owner(data_dir: &Path, owner: &Owner) -> io::Result<()> {
     storage::atomic_write(&owner_path(data_dir, owner.id), owner)
+}
+
+/// Cross-slice lookup: other slices (e.g. `pets`) key their records by
+/// `owner_id`, not `user_id`, so this resolves "which owner is the
+/// authenticated user" (PLAN.md §6 constraint 5 — a slice calls another
+/// slice's public functions directly, not through a shared repository).
+pub fn find_owner_by_user_id(data_dir: &Path, user_id: Uuid) -> io::Result<Option<Owner>> {
+    let owners: Vec<Owner> = storage::list_dir_json(&owners_dir(data_dir))?;
+    Ok(owners.into_iter().find(|o| o.user_id == user_id))
 }
 
 pub fn write_vet(data_dir: &Path, vet: &Vet) -> io::Result<()> {
@@ -150,6 +163,28 @@ mod tests {
         assert_eq!(
             storage::read_json::<Vet>(&vet_path(dir.path(), vet.id)).unwrap(),
             Some(vet)
+        );
+    }
+
+    #[test]
+    fn find_owner_by_user_id_matches_and_no_match_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let user_id = Uuid::new_v4();
+        let owner = Owner {
+            id: Uuid::new_v4(),
+            user_id,
+            name: "Alice".to_string(),
+            phone: "555-0100".to_string(),
+        };
+        write_owner(dir.path(), &owner).unwrap();
+
+        assert_eq!(
+            find_owner_by_user_id(dir.path(), user_id).unwrap(),
+            Some(owner)
+        );
+        assert_eq!(
+            find_owner_by_user_id(dir.path(), Uuid::new_v4()).unwrap(),
+            None
         );
     }
 }

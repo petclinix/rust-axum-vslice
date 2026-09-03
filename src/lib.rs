@@ -13,6 +13,7 @@ pub fn build_router(config: Config) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(features::registration::router())
+        .merge(features::pets::router())
         .with_state(config)
 }
 
