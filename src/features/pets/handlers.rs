@@ -11,7 +11,10 @@ use crate::auth::AuthUser;
 use crate::config::Config;
 use crate::domain::Role;
 use crate::error::AppError;
+use crate::features::appointments::model as appointments;
 use crate::features::registration::model as registration;
+use crate::features::visits::VisitResponse;
+use crate::features::visits::model as visits;
 
 use super::{model, uploads};
 
@@ -40,6 +43,16 @@ pub struct PetResponse {
     pub picture: String,
     #[serde(rename = "pictureContentType")]
     pub picture_content_type: String,
+}
+
+/// `GET /api/pets/{id}` specifically includes visit history (PLAN.md §9);
+/// list/add/update don't, so this stays a separate shape from
+/// `PetResponse` rather than an always-present-but-usually-empty field.
+#[derive(Debug, Serialize)]
+pub struct PetDetailResponse {
+    #[serde(flatten)]
+    pub pet: PetResponse,
+    pub visits: Vec<VisitResponse>,
 }
 
 fn require_owner(auth: &AuthUser) -> Result<(), AppError> {
@@ -152,12 +165,10 @@ pub async fn get_pet(
     State(config): State<Config>,
     auth: AuthUser,
     PathParam(pet_id): PathParam<Uuid>,
-) -> Result<Json<PetResponse>, AppError> {
+) -> Result<Json<PetDetailResponse>, AppError> {
     require_owner(&auth)?;
 
     let data_dir = config.data_dir.clone();
-    // Visit history (PLAN.md §8's "includes visit history" note) arrives
-    // once the `visits` slice exists (build order §13.7) — not yet.
     let response =
         tokio::task::spawn_blocking(move || get_pet_blocking(&data_dir, auth.id, pet_id))
             .await
@@ -166,13 +177,33 @@ pub async fn get_pet(
     Ok(Json(response))
 }
 
-fn get_pet_blocking(data_dir: &Path, user_id: Uuid, pet_id: Uuid) -> Result<PetResponse, AppError> {
+/// Visit history (PLAN.md §9): every completed appointment for this pet
+/// that has a recorded visit — a cross-slice read into both `appointments`
+/// and `visits` (PLAN.md §6 constraint 5).
+fn get_pet_blocking(
+    data_dir: &Path,
+    user_id: Uuid,
+    pet_id: Uuid,
+) -> Result<PetDetailResponse, AppError> {
     let owner_id = resolve_owner_id(data_dir, user_id)?;
     let pet = load_owned_pet(data_dir, owner_id, pet_id)?;
     let picture =
         uploads::read_picture(data_dir, pet.id, &pet.picture_content_type)?.unwrap_or_default();
 
-    Ok(to_response(pet, picture))
+    let appointment_ids: Vec<Uuid> = appointments::read_all(data_dir)?
+        .into_iter()
+        .filter(|a| a.pet_id == pet_id)
+        .map(|a| a.id)
+        .collect();
+    let pet_visits = visits::find_all_for_appointments(data_dir, &appointment_ids)?
+        .into_iter()
+        .map(VisitResponse::from)
+        .collect();
+
+    Ok(PetDetailResponse {
+        pet: to_response(pet, picture),
+        visits: pet_visits,
+    })
 }
 
 pub async fn update_pet(

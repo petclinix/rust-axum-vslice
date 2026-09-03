@@ -37,6 +37,9 @@ pub enum AppError {
     #[error("cancellation cutoff has passed")]
     CancellationCutoffPassed,
 
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     #[error("invalid request: {0}")]
     Validation(String),
 
@@ -65,6 +68,7 @@ impl AppError {
             AppError::SlotUnavailable => "SLOT_UNAVAILABLE",
             AppError::InvalidTransition(_) => "INVALID_TRANSITION",
             AppError::CancellationCutoffPassed => "CANCELLATION_CUTOFF_PASSED",
+            AppError::Conflict(_) => "CONFLICT",
             AppError::Validation(_) => "VALIDATION_ERROR",
             AppError::Storage(_) => "STORAGE_ERROR",
             AppError::Internal => "INTERNAL_ERROR",
@@ -82,6 +86,7 @@ impl AppError {
             AppError::SlotUnavailable => StatusCode::CONFLICT,
             AppError::InvalidTransition(_) => StatusCode::CONFLICT,
             AppError::CancellationCutoffPassed => StatusCode::CONFLICT,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::Storage(_) | AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
