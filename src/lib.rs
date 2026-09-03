@@ -1,11 +1,19 @@
+pub mod auth;
 pub mod config;
 pub mod domain;
+pub mod error;
+pub mod features;
 pub mod storage;
 
 use axum::{Router, routing::get};
 
-pub fn build_router() -> Router {
-    Router::new().route("/health", get(health))
+use config::Config;
+
+pub fn build_router(config: Config) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .merge(features::registration::router())
+        .with_state(config)
 }
 
 async fn health() -> &'static str {
@@ -21,7 +29,8 @@ mod tests {
 
     #[tokio::test]
     async fn health_check_returns_ok() {
-        let app = build_router();
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_router(Config::for_test(dir.path().to_path_buf()));
 
         let response = app
             .oneshot(

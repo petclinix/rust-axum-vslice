@@ -9,8 +9,9 @@ async fn main() {
     let config = Config::from_env();
     std::fs::create_dir_all(&config.data_dir).expect("failed to create data dir");
 
-    let app = build_router();
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+    let port = config.port;
+    let app = build_router(config);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

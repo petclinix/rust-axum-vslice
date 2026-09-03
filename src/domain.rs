@@ -5,6 +5,17 @@
 use serde::{Deserialize, Serialize};
 use time::PrimitiveDateTime;
 
+/// A user's role in the system (PLAN.md §7). `Owner` and `Vet` self-register;
+/// `Admin` is seeded on first boot and never created through the register
+/// endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Owner,
+    Vet,
+    Admin,
+}
+
 /// The appointment lifecycle (PLAN.md §8): `Booked → Confirmed →
 /// Completed/Cancelled/NoShow`. `Cancelled` is reachable from both `Booked`
 /// and `Confirmed` (cancellation is cutoff-gated, not confirm-gated).
