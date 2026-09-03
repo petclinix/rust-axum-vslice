@@ -1,0 +1,9 @@
+## Cargo
+/target/
+
+## App data (files-instead-of-a-database — see PLAN.md §4)
+/data/
+.env
+
+## IntelliJ IDEA
+/.idea/
