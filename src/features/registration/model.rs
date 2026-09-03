@@ -57,8 +57,12 @@ fn owner_path(data_dir: &Path, id: Uuid) -> PathBuf {
     owners_dir(data_dir).join(format!("{id}.json"))
 }
 
+fn vets_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("vets")
+}
+
 fn vet_path(data_dir: &Path, id: Uuid) -> PathBuf {
-    data_dir.join("vets").join(format!("{id}.json"))
+    vets_dir(data_dir).join(format!("{id}.json"))
 }
 
 /// The registration slice's own lock: register-time email-uniqueness check +
@@ -95,6 +99,14 @@ pub fn find_owner_by_user_id(data_dir: &Path, user_id: Uuid) -> io::Result<Optio
 
 pub fn write_vet(data_dir: &Path, vet: &Vet) -> io::Result<()> {
     storage::atomic_write(&vet_path(data_dir, vet.id), vet)
+}
+
+/// Cross-slice lookup: `availability` (and later `appointments`) key their
+/// records by `vet_id`, not `user_id` — same rationale as
+/// `find_owner_by_user_id`.
+pub fn find_vet_by_user_id(data_dir: &Path, user_id: Uuid) -> io::Result<Option<Vet>> {
+    let vets: Vec<Vet> = storage::list_dir_json(&vets_dir(data_dir))?;
+    Ok(vets.into_iter().find(|v| v.user_id == user_id))
 }
 
 #[cfg(test)]
@@ -184,6 +196,25 @@ mod tests {
         );
         assert_eq!(
             find_owner_by_user_id(dir.path(), Uuid::new_v4()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn find_vet_by_user_id_matches_and_no_match_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let user_id = Uuid::new_v4();
+        let vet = Vet {
+            id: Uuid::new_v4(),
+            user_id,
+            name: "Dr. Bob".to_string(),
+            specialty: "Surgery".to_string(),
+        };
+        write_vet(dir.path(), &vet).unwrap();
+
+        assert_eq!(find_vet_by_user_id(dir.path(), user_id).unwrap(), Some(vet));
+        assert_eq!(
+            find_vet_by_user_id(dir.path(), Uuid::new_v4()).unwrap(),
             None
         );
     }

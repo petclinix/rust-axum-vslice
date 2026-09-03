@@ -14,6 +14,7 @@ pub fn build_router(config: Config) -> Router {
         .route("/health", get(health))
         .merge(features::registration::router())
         .merge(features::pets::router())
+        .merge(features::availability::router())
         .with_state(config)
 }
 
