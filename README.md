@@ -12,8 +12,9 @@ opposite of the other two PetcliniX implementations (`java-springboot-react-mtie
 concurrency model that replaces database transactions/row locks, and the module
 layout.
 
-**Status:** infrastructure scaffolding only (project skeleton, CI, Docker). The
-feature slices in `PLAN.md` §6/§13 are not implemented yet.
+**Status:** all feature slices in `PLAN.md` §6/§13 are implemented — registration,
+pets, availability, appointments (including the `flock` concurrency stress test),
+visits, and admin.
 
 ## Quickstart
 
@@ -22,6 +23,10 @@ docker compose up --build
 ```
 
 Then visit http://localhost:8080/health.
+
+Owners and vets self-register via `POST /api/auth/register`. The admin account is
+seeded on first boot (never self-registered — PLAN.md §7): `admin@petclinix.local` /
+`admin12345`, the same fixed credentials `php-twig-mtier` seeds its admin with.
 
 ### Optional: with the React frontend
 
@@ -35,9 +40,9 @@ profile, fronted by an nginx reverse proxy since the frontend image calls relati
 docker compose --profile frontend up --build
 ```
 
-Then visit http://localhost:8090. Most calls will 404 until the corresponding API
-routes exist (see `PLAN.md` §8) — only pet endpoints are meant to line up, and only
-once the `pets` slice is implemented.
+Then visit http://localhost:8090. Only the pet-picture wire contract is meant to line
+up with that frontend (see `PLAN.md` §9's scope note) — other routes/fields aren't
+guaranteed to match.
 
 ## Running tests
 

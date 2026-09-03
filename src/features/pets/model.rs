@@ -46,6 +46,12 @@ pub fn list_pets_for_owner(data_dir: &Path, owner_id: Uuid) -> io::Result<Vec<Pe
         .collect())
 }
 
+/// Cross-slice: `admin::stats` needs the total pet count across every
+/// owner.
+pub fn list_all(data_dir: &Path) -> io::Result<Vec<Pet>> {
+    storage::list_dir_json(&pets_dir(data_dir))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,6 +104,15 @@ mod tests {
         expected.sort_by_key(|p| p.id);
 
         assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn list_all_spans_every_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        write_pet(dir.path(), &sample_pet(Uuid::new_v4())).unwrap();
+        write_pet(dir.path(), &sample_pet(Uuid::new_v4())).unwrap();
+
+        assert_eq!(list_all(dir.path()).unwrap().len(), 2);
     }
 
     #[test]

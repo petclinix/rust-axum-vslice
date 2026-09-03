@@ -11,6 +11,7 @@ use crate::auth::AuthUser;
 use crate::config::Config;
 use crate::domain::{AppointmentStatus, Role, TimeRange};
 use crate::error::AppError;
+use crate::features::admin::activity;
 use crate::features::availability::model as availability;
 use crate::features::pets::model as pets;
 use crate::features::registration::model as registration;
@@ -102,6 +103,14 @@ fn pet_not_found() -> AppError {
 
 fn appointment_not_found() -> AppError {
     AppError::NotFound("appointment not found".to_string())
+}
+
+/// Best-effort (PLAN.md §6): a logging failure shouldn't fail an
+/// appointment mutation that already succeeded.
+fn log_activity(data_dir: &Path, event_type: &str, details: serde_json::Value) {
+    if let Err(e) = activity::record(data_dir, event_type, details) {
+        tracing::warn!(error = %e, "failed to record activity log entry");
+    }
 }
 
 fn free_slots_for(
@@ -221,6 +230,11 @@ fn book_blocking(
         status: AppointmentStatus::Booked,
     };
     model::write_appointment(data_dir, &appointment)?;
+    log_activity(
+        data_dir,
+        "appointment_booked",
+        serde_json::json!({"appointment_id": appointment.id, "vet_id": vet_id, "pet_id": pet_id}),
+    );
 
     Ok(appointment)
 }
@@ -309,6 +323,11 @@ fn cancel_blocking(
 
     appointment.status = AppointmentStatus::Cancelled;
     model::write_appointment(data_dir, &appointment)?;
+    log_activity(
+        data_dir,
+        "appointment_cancelled",
+        serde_json::json!({"appointment_id": appointment.id, "vet_id": vet_id}),
+    );
 
     Ok(appointment)
 }
@@ -400,6 +419,15 @@ fn reschedule_blocking(
         status: AppointmentStatus::Booked,
     };
     model::write_appointment(data_dir, &new_appointment)?;
+    log_activity(
+        data_dir,
+        "appointment_rescheduled",
+        serde_json::json!({
+            "old_appointment_id": appointment_id,
+            "new_appointment_id": new_appointment.id,
+            "vet_id": vet_id,
+        }),
+    );
 
     Ok(new_appointment)
 }
@@ -470,6 +498,18 @@ fn vet_transition_blocking(
 
     appointment.status = next;
     model::write_appointment(data_dir, &appointment)?;
+    let event_type = match next {
+        AppointmentStatus::Confirmed => "appointment_confirmed",
+        AppointmentStatus::Completed => "appointment_completed",
+        AppointmentStatus::NoShow => "appointment_no_show",
+        // `can_transition_to` above already rejects any other target.
+        _ => "appointment_status_changed",
+    };
+    log_activity(
+        data_dir,
+        event_type,
+        serde_json::json!({"appointment_id": appointment.id, "vet_id": vet_id}),
+    );
 
     Ok(appointment)
 }

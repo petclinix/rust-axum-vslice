@@ -75,6 +75,16 @@ pub fn write_user(data_dir: &Path, user: &User) -> io::Result<()> {
     storage::atomic_write(&user_path(data_dir, user.id), user)
 }
 
+pub fn read_user(data_dir: &Path, id: Uuid) -> io::Result<Option<User>> {
+    storage::read_json(&user_path(data_dir, id))
+}
+
+/// Cross-slice: `admin::users` lists every account; `admin::stats` and the
+/// admin-seeding startup check both need to know who already exists.
+pub fn list_all_users(data_dir: &Path) -> io::Result<Vec<User>> {
+    storage::list_dir_json(&users_dir(data_dir))
+}
+
 /// Case-insensitive — email uniqueness must not depend on how a client
 /// capitalizes the address it types in.
 pub fn find_user_by_email(data_dir: &Path, email: &str) -> io::Result<Option<User>> {
@@ -107,6 +117,12 @@ pub fn write_vet(data_dir: &Path, vet: &Vet) -> io::Result<()> {
 pub fn find_vet_by_user_id(data_dir: &Path, user_id: Uuid) -> io::Result<Option<Vet>> {
     let vets: Vec<Vet> = storage::list_dir_json(&vets_dir(data_dir))?;
     Ok(vets.into_iter().find(|v| v.user_id == user_id))
+}
+
+/// Cross-slice: `admin::stats` needs every vet (including ones with zero
+/// appointments) to report a complete per-vet breakdown.
+pub fn list_all_vets(data_dir: &Path) -> io::Result<Vec<Vet>> {
+    storage::list_dir_json(&vets_dir(data_dir))
 }
 
 #[cfg(test)]
@@ -217,5 +233,37 @@ mod tests {
             find_vet_by_user_id(dir.path(), Uuid::new_v4()).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn read_user_by_id_and_list_all_users() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = sample_user("a@example.com");
+        let b = sample_user("b@example.com");
+        write_user(dir.path(), &a).unwrap();
+        write_user(dir.path(), &b).unwrap();
+
+        assert_eq!(read_user(dir.path(), a.id).unwrap(), Some(a.clone()));
+        assert_eq!(read_user(dir.path(), Uuid::new_v4()).unwrap(), None);
+
+        let mut all = list_all_users(dir.path()).unwrap();
+        all.sort_by_key(|u| u.id);
+        let mut expected = vec![a, b];
+        expected.sort_by_key(|u| u.id);
+        assert_eq!(all, expected);
+    }
+
+    #[test]
+    fn list_all_vets_returns_every_vet() {
+        let dir = tempfile::tempdir().unwrap();
+        let vet = Vet {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            name: "Dr. Bob".to_string(),
+            specialty: "Surgery".to_string(),
+        };
+        write_vet(dir.path(), &vet).unwrap();
+
+        assert_eq!(list_all_vets(dir.path()).unwrap(), vec![vet]);
     }
 }

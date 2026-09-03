@@ -17,6 +17,7 @@ pub fn build_router(config: Config) -> Router {
         .merge(features::availability::router())
         .merge(features::appointments::router())
         .merge(features::visits::router())
+        .merge(features::admin::router())
         .with_state(config)
 }
 

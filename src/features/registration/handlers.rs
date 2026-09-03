@@ -11,6 +11,7 @@ use crate::auth::{password, token};
 use crate::config::Config;
 use crate::domain::Role;
 use crate::error::AppError;
+use crate::features::admin::activity;
 use crate::storage;
 
 use super::model;
@@ -142,6 +143,17 @@ fn register_locked(data_dir: &Path, req: RegisterRequest) -> Result<RegisterResp
         Role::Admin => unreachable!("rejected in validate_register_request"),
     }
 
+    // Best-effort: a logging failure shouldn't fail a registration that
+    // already succeeded (PLAN.md §6 — activity is a thin side utility, not
+    // part of the transaction it observes).
+    if let Err(e) = activity::record(
+        data_dir,
+        "user_registered",
+        serde_json::json!({"user_id": user.id, "role": user.role}),
+    ) {
+        tracing::warn!(error = %e, "failed to record activity log entry");
+    }
+
     Ok(RegisterResponse {
         id: user.id,
         email: user.email,
@@ -191,6 +203,14 @@ fn login_locked(data_dir: &Path, req: LoginRequest) -> Result<model::User, AppEr
 
     user.last_login = Some(OffsetDateTime::now_utc());
     model::write_user(data_dir, &user)?;
+
+    if let Err(e) = activity::record(
+        data_dir,
+        "user_login",
+        serde_json::json!({"user_id": user.id}),
+    ) {
+        tracing::warn!(error = %e, "failed to record activity log entry");
+    }
 
     Ok(user)
 }
