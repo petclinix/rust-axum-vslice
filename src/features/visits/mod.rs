@@ -1,20 +1,25 @@
-//! A vet records diagnosis/vaccination/notes on a completed appointment;
-//! the owner reads visit history for their pets.
+//! A vet records/edits a visit summary on a confirmed appointment (which
+//! completes it — see `handlers::put_vet_visit`); the owner reads visit
+//! history for their pets.
 
 mod handlers;
 pub mod model;
 #[cfg(test)]
 mod tests;
 
-pub use handlers::VisitResponse;
-
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::get;
 
 use crate::config::Config;
 
 pub fn router() -> Router<Config> {
     Router::new()
-        .route("/api/appointments/{id}/visit", post(handlers::record_visit))
-        .route("/api/pets/{id}/visits", get(handlers::list_for_pet))
+        .route(
+            "/api/vet/visits/{id}",
+            get(handlers::get_vet_visit).put(handlers::put_vet_visit),
+        )
+        .route(
+            "/api/owner/pets/{id}/visits",
+            get(handlers::list_owner_pet_visits),
+        )
 }

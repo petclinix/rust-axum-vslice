@@ -42,6 +42,4 @@ pub fn router() -> Router<Config> {
             "/api/vet/appointments/{id}/no-show",
             put(handlers::no_show_appointment),
         )
-        // Off-spec, temporary — see `handlers::complete`'s doc comment.
-        .route("/api/appointments/{id}/complete", post(handlers::complete))
 }

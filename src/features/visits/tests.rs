@@ -38,9 +38,9 @@ impl Fixture {
     }
 }
 
-/// Seeds an owner + their pet and a vet — no availability, since these
-/// tests seed appointments directly at whatever status they need rather
-/// than booking through the HTTP API.
+/// Seeds an owner + their pet and a vet — no location, since these tests
+/// seed appointments directly at whatever status they need rather than
+/// booking through the HTTP API.
 fn seed() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let config = Config::for_test(dir.path().to_path_buf());
@@ -175,44 +175,100 @@ async fn call(
 }
 
 fn visit_payload() -> Value {
-    json!({"type": "diagnosis", "remark": "Healthy, no concerns."})
+    json!({
+        "vetSummary": "Healthy, no concerns.",
+        "ownerSummary": "Ate breakfast fine, a bit lethargic.",
+        "vaccination": "",
+    })
+}
+
+fn vet_visit_url(appointment_id: Uuid) -> String {
+    format!("/api/vet/visits/{}", domain::wire_id(appointment_id))
 }
 
 #[tokio::test]
-async fn record_visit_on_a_completed_appointment_succeeds() {
+async fn put_vet_visit_creates_it_and_completes_a_confirmed_appointment() {
     let fixture = seed();
-    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Completed);
+    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Confirmed);
 
     let (status, body) = call(
         fixture.app(),
-        "POST",
-        &format!(
-            "/api/appointments/{}/visit",
-            domain::wire_id(appointment_id)
-        ),
+        "PUT",
+        &vet_visit_url(appointment_id),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
     .await;
 
-    assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["type"], "diagnosis");
-    assert_eq!(body["remark"], "Healthy, no concerns.");
-    assert_eq!(body["appointment_id"], appointment_id.to_string());
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["vetSummary"], "Healthy, no concerns.");
+    assert_eq!(body["ownerSummary"], "Ate breakfast fine, a bit lethargic.");
+    assert_eq!(body["vaccination"], "");
+    assert!(body["id"].is_i64());
+
+    // This file only mounts `visits::router()`, not the full app, so the
+    // resulting status is checked by reading the appointment record
+    // directly rather than through `GET /api/vet/appointments`.
+    let appointment =
+        appointments::read_appointment(fixture.data_dir(), fixture.vet_id, appointment_id)
+            .unwrap()
+            .unwrap();
+    assert_eq!(appointment.status, AppointmentStatus::Completed);
 }
 
 #[tokio::test]
-async fn record_visit_requires_the_vet_role() {
+async fn get_vet_visit_after_put_returns_it() {
     let fixture = seed();
-    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Completed);
+    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Confirmed);
+    call(
+        fixture.app(),
+        "PUT",
+        &vet_visit_url(appointment_id),
+        Some(&fixture.vet_token),
+        Some(visit_payload()),
+    )
+    .await;
+
+    let (status, body) = call(
+        fixture.app(),
+        "GET",
+        &vet_visit_url(appointment_id),
+        Some(&fixture.vet_token),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["vetSummary"], "Healthy, no concerns.");
+}
+
+#[tokio::test]
+async fn get_vet_visit_for_an_appointment_with_no_visit_is_not_found() {
+    let fixture = seed();
+    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Confirmed);
+
+    let (status, body) = call(
+        fixture.app(),
+        "GET",
+        &vet_visit_url(appointment_id),
+        Some(&fixture.vet_token),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "NOT_FOUND");
+}
+
+#[tokio::test]
+async fn put_vet_visit_requires_the_vet_role() {
+    let fixture = seed();
+    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Confirmed);
 
     let (status, _) = call(
         fixture.app(),
-        "POST",
-        &format!(
-            "/api/appointments/{}/visit",
-            domain::wire_id(appointment_id)
-        ),
+        "PUT",
+        &vet_visit_url(appointment_id),
         Some(&fixture.owner_token),
         Some(visit_payload()),
     )
@@ -222,84 +278,56 @@ async fn record_visit_requires_the_vet_role() {
 }
 
 #[tokio::test]
-async fn record_visit_on_a_merely_booked_appointment_is_a_conflict() {
+async fn put_vet_visit_on_a_merely_booked_appointment_is_an_invalid_transition() {
     let fixture = seed();
     let appointment_id = seed_appointment(&fixture, AppointmentStatus::Booked);
 
     let (status, body) = call(
         fixture.app(),
-        "POST",
-        &format!(
-            "/api/appointments/{}/visit",
-            domain::wire_id(appointment_id)
-        ),
+        "PUT",
+        &vet_visit_url(appointment_id),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
     .await;
 
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["code"], "CONFLICT");
+    assert_eq!(body["code"], "INVALID_TRANSITION");
 }
 
 #[tokio::test]
-async fn recording_a_visit_twice_is_a_conflict() {
+async fn put_vet_visit_twice_updates_it_in_place() {
     let fixture = seed();
-    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Completed);
-    call(
+    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Confirmed);
+    let (_, first) = call(
         fixture.app(),
-        "POST",
-        &format!(
-            "/api/appointments/{}/visit",
-            domain::wire_id(appointment_id)
-        ),
+        "PUT",
+        &vet_visit_url(appointment_id),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
     .await;
 
-    let (status, body) = call(
+    let mut updated_payload = visit_payload();
+    updated_payload["vetSummary"] = json!("Follow-up: fully recovered.");
+    let (status, second) = call(
         fixture.app(),
-        "POST",
-        &format!(
-            "/api/appointments/{}/visit",
-            domain::wire_id(appointment_id)
-        ),
+        "PUT",
+        &vet_visit_url(appointment_id),
         Some(&fixture.vet_token),
-        Some(visit_payload()),
+        Some(updated_payload),
     )
     .await;
 
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["code"], "CONFLICT");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(second["id"], first["id"], "same visit, updated in place");
+    assert_eq!(second["vetSummary"], "Follow-up: fully recovered.");
 }
 
 #[tokio::test]
-async fn record_visit_with_an_empty_remark_is_rejected() {
+async fn put_vet_visit_by_a_non_owning_vet_is_not_found() {
     let fixture = seed();
-    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Completed);
-    let mut payload = visit_payload();
-    payload["remark"] = json!("   ");
-
-    let (status, _) = call(
-        fixture.app(),
-        "POST",
-        &format!(
-            "/api/appointments/{}/visit",
-            domain::wire_id(appointment_id)
-        ),
-        Some(&fixture.vet_token),
-        Some(payload),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn record_visit_by_a_non_owning_vet_is_not_found() {
-    let fixture = seed();
-    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Completed);
+    let appointment_id = seed_appointment(&fixture, AppointmentStatus::Confirmed);
 
     let other_vet_user_id = Uuid::new_v4();
     registration::write_user(
@@ -334,11 +362,8 @@ async fn record_visit_by_a_non_owning_vet_is_not_found() {
 
     let (status, _) = call(
         fixture.app(),
-        "POST",
-        &format!(
-            "/api/appointments/{}/visit",
-            domain::wire_id(appointment_id)
-        ),
+        "PUT",
+        &vet_visit_url(appointment_id),
         Some(&other_vet_token),
         Some(visit_payload()),
     )
@@ -348,14 +373,14 @@ async fn record_visit_by_a_non_owning_vet_is_not_found() {
 }
 
 #[tokio::test]
-async fn list_for_pet_returns_only_appointments_with_a_recorded_visit() {
+async fn list_owner_pet_visits_returns_only_appointments_with_a_recorded_visit() {
     let fixture = seed();
-    let visited = seed_appointment(&fixture, AppointmentStatus::Completed);
-    seed_appointment(&fixture, AppointmentStatus::Completed); // no visit recorded
+    let visited = seed_appointment(&fixture, AppointmentStatus::Confirmed);
+    seed_appointment(&fixture, AppointmentStatus::Confirmed); // no visit recorded
     call(
         fixture.app(),
-        "POST",
-        &format!("/api/appointments/{}/visit", domain::wire_id(visited)),
+        "PUT",
+        &vet_visit_url(visited),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
@@ -364,7 +389,7 @@ async fn list_for_pet_returns_only_appointments_with_a_recorded_visit() {
     let (status, body) = call(
         fixture.app(),
         "GET",
-        &format!("/api/pets/{}/visits", domain::wire_id(fixture.pet_id)),
+        &format!("/api/owner/pets/{}/visits", domain::wire_id(fixture.pet_id)),
         Some(&fixture.owner_token),
         None,
     )
@@ -373,17 +398,23 @@ async fn list_for_pet_returns_only_appointments_with_a_recorded_visit() {
     assert_eq!(status, StatusCode::OK);
     let visits = body.as_array().unwrap();
     assert_eq!(visits.len(), 1);
-    assert_eq!(visits[0]["appointment_id"], visited.to_string());
+    assert_eq!(
+        visits[0]["ownerSummary"],
+        "Ate breakfast fine, a bit lethargic."
+    );
+    assert!(visits[0]["vetUsername"].as_str().unwrap().contains('@'));
+    assert_eq!(visits[0]["startsAt"], "2026-09-07 10:00:00.0");
+    assert!(visits[0].get("vetSummary").is_none());
 }
 
 #[tokio::test]
-async fn list_for_pet_requires_the_owner_role() {
+async fn list_owner_pet_visits_requires_the_owner_role() {
     let fixture = seed();
 
     let (status, _) = call(
         fixture.app(),
         "GET",
-        &format!("/api/pets/{}/visits", domain::wire_id(fixture.pet_id)),
+        &format!("/api/owner/pets/{}/visits", domain::wire_id(fixture.pet_id)),
         Some(&fixture.vet_token),
         None,
     )
@@ -393,7 +424,7 @@ async fn list_for_pet_requires_the_owner_role() {
 }
 
 #[tokio::test]
-async fn list_for_someone_elses_pet_is_not_found() {
+async fn list_owner_pet_visits_for_someone_elses_pet_is_not_found() {
     let fixture = seed();
     let other_owner_user_id = Uuid::new_v4();
     registration::write_user(
@@ -429,7 +460,7 @@ async fn list_for_someone_elses_pet_is_not_found() {
     let (status, _) = call(
         fixture.app(),
         "GET",
-        &format!("/api/pets/{}/visits", domain::wire_id(fixture.pet_id)),
+        &format!("/api/owner/pets/{}/visits", domain::wire_id(fixture.pet_id)),
         Some(&other_token),
         None,
     )

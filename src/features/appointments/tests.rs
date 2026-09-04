@@ -386,7 +386,11 @@ async fn cancel_after_the_cutoff_is_rejected() {
 }
 
 #[tokio::test]
-async fn confirm_then_complete_flow() {
+async fn confirm_moves_the_appointment_to_confirmed() {
+    // Completing an appointment moves through `visits::handlers::put_vet_visit`
+    // now — no `complete` endpoint left in this slice at all, see
+    // `docs/petclinix-openapi-snapshot.json`; covered by
+    // `visits::tests::put_vet_visit_creates_it_and_completes_a_confirmed_appointment`.
     let fixture = seed();
     let id = book(&fixture, datetime!(2026-09-07 10:00)).await;
 
@@ -400,17 +404,6 @@ async fn confirm_then_complete_flow() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(status_of(&fixture, id).await, "CONFIRMED");
-
-    let (status, body) = call(
-        fixture.app(),
-        "POST",
-        &format!("/api/appointments/{id}/complete"),
-        Some(&fixture.vet_token),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "COMPLETED");
 }
 
 /// `PUT .../confirm` and `.../no-show` return no body (see

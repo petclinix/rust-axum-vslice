@@ -35,8 +35,10 @@ pub fn lock_path(data_dir: &Path, vet_id: Uuid) -> PathBuf {
 ```
 
 This is exactly as coarse as necessary and no coarser: it serializes every write
-for one vet's calendar (book, cancel, reschedule, confirm, complete, no-show) but
-never blocks a booking attempt for a *different* vet. It's the direct filesystem
+for one vet's calendar (book, cancel, reschedule, confirm, complete, no-show — the
+last of those triggered from `visits::handlers::put_vet_visit` now, not an
+`appointments` handler, but still the same lock) but never blocks a booking
+attempt for a *different* vet. It's the direct filesystem
 analogue of `php-twig-mtier` taking a `SELECT ... FOR UPDATE` row lock on the vet
 being booked before its own overlap check + insert — same shape, a different
 substrate.
@@ -86,17 +88,20 @@ racing on the same appointment resolve to one winner, not a torn write).
 
 ### The read path
 
-`GET /api/vets/{id}/slots` and a vet's own `GET /api/appointments` listing take a
-**shared** lock (`storage::FileLock::shared`) around their directory scan — cheap,
-allows concurrent readers, and guards against observing this vet's directory
-mid-way through a concurrent multi-file write (the single-file atomic rename
-already prevents a torn *individual* record, but not a torn *view across* several
-files, if one were ever introduced):
+A vet's own `GET /api/vet/appointments` listing (and `locations::handlers::
+available_slots`'s busy-range scan, which reads the same vet-partitioned
+appointment directory from a different slice) take a **shared** lock
+(`storage::FileLock::shared`) around their directory scan — cheap, allows
+concurrent readers, and guards against observing this vet's directory mid-way
+through a concurrent multi-file write (the single-file atomic rename already
+prevents a torn *individual* record, but not a torn *view across* several files,
+if one were ever introduced):
 
 ```rust
-fn get_slots_blocking(data_dir: &Path, vet_id: Uuid, date: Date) -> Result<Vec<TimeRange>, AppError> {
+fn list_vet_appointments_blocking(data_dir: &Path, user_id: Uuid) -> Result<Vec<VetAppointmentResponse>, AppError> {
+    let vet_id = resolve_vet_id(data_dir, user_id)?;
     let _lock = crate::storage::FileLock::shared(&model::lock_path(data_dir, vet_id))?;
-    free_slots_for(data_dir, vet_id, date, None)
+    // ...
 }
 ```
 
@@ -459,53 +464,52 @@ suite, once this was found, confirmed it was the only occurrence.
 
 ---
 
-## 8. Locating an Appointment by Id Alone: A Bounded Scan, Not a Second Index
+## 8. Locating an Appointment by Wire Id: From a Bounded Scan to a Full One
 
-Appointments are partitioned by `vet_id` (§1) — but `POST
-/api/appointments/{id}/cancel` and `.../reschedule` only carry the appointment id
-in the URL. An owner-initiated cancel doesn't know which vet the appointment
-belongs to; a vet-initiated one doesn't need to (see below). Resolving "which
-vet's directory holds this id" without a secondary index means checking each vet
-directory for the matching filename:
+Appointments are partitioned by `vet_id` (§1) — but `DELETE
+/api/owner/appointments/{id}`, `.../reschedule`, and `visits::handlers::
+put_vet_visit` only carry the appointment's **wire id** (`domain::wire_id`, §6) in
+the URL. Before wire ids existed, resolving "which vet's directory holds this id"
+was a bounded, targeted check: the real `Uuid` was also the filename, so a
+directory listing plus one `Path::exists()` per vet found it without reading a
+single record. That's gone now — a wire id isn't a filename, so there's no
+existence check to do; the only way to find the record it was derived from is to
+read every candidate and compare `domain::wire_id(candidate.id)` against it:
 
 ```rust
-pub fn find_vet_id_for_appointment(data_dir: &Path, appointment_id: Uuid) -> io::Result<Option<Uuid>> {
-    let root = appointments_root(data_dir);
-    for entry in std::fs::read_dir(&root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() { continue; }
-        let Ok(vet_id) = entry.file_name().to_string_lossy().parse::<Uuid>() else { continue };
-        if entry.path().join(format!("{appointment_id}.json")).exists() {
-            return Ok(Some(vet_id));
-        }
-    }
-    Ok(None)
+pub fn find_by_wire_id(data_dir: &Path, wire_id: i64) -> io::Result<Option<Appointment>> {
+    Ok(read_all(data_dir)?
+        .into_iter()
+        .find(|a| domain::wire_id(a.id) == wire_id))
 }
 ```
 
-This checks one filename's existence per vet directory — it never parses or reads
-an appointment record it isn't looking for, so it isn't the kind of whole-`data/`
-scan `architecture.md`'s data-layout section warns against; it's a bounded,
-targeted existence check across a directory listing that's cheap regardless of how
-many appointments each vet has. `vet_id` never changes for an appointment once
-created, so this is safe to do *before* acquiring any lock — by the time the
-caller takes `lock::acquire(data_dir, vet_id)`, the vet_id it resolved is still
-correct.
+`read_all` (below) already walks every vet directory and deserializes every
+record for the owner "mine" listing — `find_by_wire_id` reuses it rather than a
+second traversal, so this is the same cost class the owner listing already pays,
+not a new one. `vet_id` never changes for an appointment once created, so it's
+still safe to resolve *before* acquiring any lock — by the time the caller takes
+`lock::acquire(data_dir, vet_id)`, the `vet_id` it resolved is still correct;
+`find_by_wire_id` fixes the *location*, the lock (plus a fresh
+`read_appointment` under it) fixes the *content*.
 
-**Vet-initiated actions skip this entirely.** `confirm`/`complete`/`no-show`
-resolve the calling vet's *own* `vet_id` from their auth token, then read
-`appointments/<own_vet_id>/<id>.json` directly — an `O(1)` path lookup, and a vet
-attempting to confirm another vet's appointment gets a plain `NotFound` for free,
-with no separate ownership check needed, since the file simply isn't in their own
-directory.
+**Vet-initiated actions still short-circuit the "which vet" question**, just not
+the scan itself: `confirm`/`no-show` (and `put_vet_visit`, which now owns
+`complete`, §10) resolve the calling vet's *own* `vet_id` from their auth token
+first, so `find_by_wire_id`'s result only needs an equality check
+(`located.vet_id != vet_id`) rather than an ownership lookup — a vet targeting
+another vet's appointment gets a plain `NotFound`, same as before, just via a
+comparison instead of a directory the file wasn't in.
 
-**The one place a truly unbounded scan is unavoidable**: an owner's `GET
-/api/appointments` ("mine") has no single vet to scope to — their pets may have
-appointments with several different vets. `appointments::model::read_all` walks
-every vet directory and deserializes every record, then the caller filters by
-pet ownership. This mirrors the same trade-off `architecture.md` accepts for admin
-stats: when the query itself is genuinely global, a global scan is the only way to
-answer it correctly.
+**The owner "mine" listing was already an unbounded scan.** `GET
+/api/owner/appointments` has no single vet to scope to — an owner's pets may have
+appointments with several different vets — so `appointments::model::read_all`
+walking every vet directory and deserializing every record was already the shape
+of this problem before wire ids existed; `find_by_wire_id` just extended that same
+shape to single-record lookups too. This mirrors the same trade-off
+`architecture.md` accepts for admin stats: when the query itself is genuinely
+global, or the identifier on the wire is deliberately not the storage key, a
+global scan is the only way to answer it correctly.
 
 ---
 

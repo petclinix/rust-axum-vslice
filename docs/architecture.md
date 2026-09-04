@@ -45,7 +45,7 @@ src/
     pets/                      # add/list/get/update/delete; owner-scoped; picture upload
     locations/                     # a vet's clinic addresses + weekly opening periods + overrides
     appointments/                  # the core slice: booking, state machine, the flock lock
-    visits/                          # a vet's diagnosis/vaccination/notes on a completed appointment
+    visits/                          # a vet's free-text visit summary; PUT also completes the appointment
     admin/                             # user list/deactivate, activity log, stats
 ```
 
@@ -69,8 +69,9 @@ module; only `model` (and, for `admin`, `activity`) is `pub`, per Design Constra
 - **`appointments`** — the core slice: booking (against a `locationId`, via
   `locations::slots::derive_free_slots`), the state machine, cancel/reschedule, and
   the `vet-<id>.lock` every write path shares (§1). Owns `appointments/`.
-- **`visits`** — a vet's diagnosis/vaccination/note on a completed appointment;
-  owner-facing history. Owns `visits/`.
+- **`visits`** — a vet's free-text summary (`vetSummary`/`ownerSummary`/
+  `vaccination`) on a confirmed appointment, recorded via the same `PUT` that
+  completes it; owner-facing history. Owns `visits/`.
 - **`admin`** — user list/deactivate, the append-only activity log other slices
   write into, and on-demand stats. Owns `activity_log/`.
 
@@ -109,8 +110,9 @@ data/
   what makes the concurrency story tractable (§1).
 - **`visits/<appointment_id>.json`** — the filename *is* the appointment id, so
   "at most one visit per appointment" is a property of the layout itself, not a
-  separate check (§1 in spirit, though this write needs no lock at all — see the
-  file's own doc comment).
+  separate check. The write itself does take the appointment's `vet-<id>.lock`
+  (`appointments::model::lock_path`) — not for the visit file, but because the
+  same write also transitions the appointment to `Completed`.
 
 ## Design Constraints
 
@@ -121,8 +123,9 @@ data/
 functions for the directories it's responsible for. Only primitive, entity-agnostic
 helpers are shared (`storage::atomic_write`, `read_json`, `list_dir_json`,
 `FileLock`). A slice that needs another slice's data calls that slice's own `model`
-function directly — e.g. `pets::handlers` calling
-`visits::model::find_all_for_appointments` — never a generic `Repository<T>`.
+function directly — e.g. `visits::handlers` calling
+`appointments::model::read_appointment`/`write_appointment` — never a generic
+`Repository<T>`.
 
 **3. Correctness comes from OS-level advisory locks (`flock`), not an in-process
 `Mutex`.** An in-process mutex would be simpler but would silently stop being
@@ -211,20 +214,20 @@ human-readable serde encoding (`"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS.f"`).
 | `DELETE /api/vet/appointments/{id}` | vet | appointments (cutoff-gated cancel; `200`, no body) |
 | `PUT /api/vet/appointments/{id}/confirm` | vet | appointments (`200`, no body) |
 | `PUT /api/vet/appointments/{id}/no-show` | vet | appointments (`200`, no body) |
-| `POST /api/appointments/{id}/complete` | vet | appointments (off-spec, temporary — see below) |
-| `POST /api/appointments/{id}/visit` | vet | visits |
-| `GET /api/pets/{id}/visits` | owner | visits |
+| `GET /api/vet/visits/{appointmentId}` | vet | visits |
+| `PUT /api/vet/visits/{appointmentId}` | vet | visits (creates or replaces; also completes the appointment) |
+| `GET /api/owner/pets/{petId}/visits` | owner | visits |
 | `GET /api/admin/users` | admin | admin |
 | `POST /api/admin/users/{id}/deactivate` | admin | admin |
 | `GET /api/admin/activity` | admin | admin |
 | `GET /api/admin/stats` | admin | admin |
 
-`POST /api/appointments/{id}/complete` is deliberately off the target contract
-(`docs/petclinix-openapi-snapshot.json` has no `complete` endpoint at all — an
-appointment completes implicitly via the vet-visit write, once `visits` itself is
-migrated) and kept at its old, unprefixed path purely so `visits` stays reachable
-in the meantime; its `{id}` is the same wire id as everywhere else, not a raw
-`Uuid`.
+There is no `complete` endpoint anywhere in the surface above — the target
+contract (`docs/petclinix-openapi-snapshot.json`) has none either. An appointment
+reaches `Completed` only as a side effect of `PUT /api/vet/visits/{appointmentId}`
+(`visits::handlers::put_vet_visit`), which is also what makes that endpoint an
+upsert rather than a one-shot create: the first successful call transitions the
+appointment, and any later call just replaces the visit's text fields in place.
 
 Appointment state machine: `Booked → Confirmed → Completed/Cancelled/NoShow`.
 `AppointmentStatus::can_transition_to` (`domain.rs`) is the single source of truth

@@ -125,39 +125,53 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .unwrap();
     assert_eq!(calendar[0]["status"], "CONFIRMED");
 
-    // `complete` stays at its old, unprefixed path for now — the target
-    // contract has no such endpoint; completing an appointment moves into
-    // the visit-write handler once `visits` itself is migrated.
-    let complete = client
-        .post(server.url(&format!("/api/appointments/{appointment_id}/complete")))
-        .bearer_auth(&vet_token)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(complete.status(), 200);
-
+    // No separate `complete` endpoint any more — `PUT .../visits/{id}`
+    // both records the visit and completes the appointment in one write.
     let visit = client
-        .post(server.url(&format!("/api/appointments/{appointment_id}/visit")))
+        .put(server.url(&format!("/api/vet/visits/{appointment_id}")))
         .bearer_auth(&vet_token)
-        .json(&json!({"type": "diagnosis", "remark": "Healthy, no concerns."}))
+        .json(&json!({
+            "vetSummary": "Healthy, no concerns.",
+            "ownerSummary": "Ate breakfast fine.",
+            "vaccination": "",
+        }))
         .send()
         .await
         .unwrap();
-    assert_eq!(visit.status(), 201);
+    assert_eq!(visit.status(), 200);
 
-    // Recording it again is a conflict — one visit per appointment.
-    let duplicate_visit = client
-        .post(server.url(&format!("/api/appointments/{appointment_id}/visit")))
+    let calendar: serde_json::Value = client
+        .get(server.url("/api/vet/appointments"))
         .bearer_auth(&vet_token)
-        .json(&json!({"type": "note", "remark": "duplicate attempt"}))
         .send()
         .await
+        .unwrap()
+        .json()
+        .await
         .unwrap();
-    assert_eq!(duplicate_visit.status(), 409);
+    assert_eq!(calendar[0]["status"], "COMPLETED");
+
+    // Recording it again updates the same visit in place — `PUT`'s usual
+    // upsert semantics, not a conflict.
+    let updated_visit: serde_json::Value = client
+        .put(server.url(&format!("/api/vet/visits/{appointment_id}")))
+        .bearer_auth(&vet_token)
+        .json(&json!({
+            "vetSummary": "Follow-up: fully recovered.",
+            "ownerSummary": "Ate breakfast fine.",
+            "vaccination": "",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated_visit["vetSummary"], "Follow-up: fully recovered.");
 
     // The owner sees it via the dedicated visit-history endpoint.
     let owner_visits: serde_json::Value = client
-        .get(server.url(&format!("/api/pets/{pet_id}/visits")))
+        .get(server.url(&format!("/api/owner/pets/{pet_id}/visits")))
         .bearer_auth(&owner_token)
         .send()
         .await
@@ -166,7 +180,7 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .await
         .unwrap();
     assert_eq!(owner_visits.as_array().unwrap().len(), 1);
-    assert_eq!(owner_visits[0]["remark"], "Healthy, no concerns.");
+    assert_eq!(owner_visits[0]["ownerSummary"], "Ate breakfast fine.");
 
     let pet_detail: serde_json::Value = client
         .get(server.url(&format!("/api/pets/{pet_id}")))
