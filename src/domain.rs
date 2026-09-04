@@ -50,6 +50,22 @@ pub enum AppointmentStatus {
     NoShow,
 }
 
+/// The kind of appointment being booked — a closed enum on the wire
+/// (`docs/petclinix-openapi-snapshot.json`'s `AppointmentRequest`/
+/// `Appointment`/`VetAppointment`). Lives here rather than in
+/// `appointments` or `locations` because both need it: `locations`' free-
+/// slot query takes it as a filter param, `appointments` will carry it on
+/// the booked record itself once that slice moves to the target contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AppointmentType {
+    Vaccination,
+    FollowUp,
+    Checkup,
+    Emergency,
+    Surgery,
+}
+
 impl AppointmentStatus {
     /// Whether the state machine allows moving from `self` to `next`. A
     /// handler must reject any transition this returns `false` for with a

@@ -321,6 +321,15 @@ sitting inside another range's interior would spuriously "overlap" it — a real
 caught by this file's own test suite before it ever reached `appointments::slots`,
 not a hypothetical.
 
+### The same rule, twice, for now
+
+`locations::slots::derive_free_slots` (§10) ports this exact rule onto
+`OpeningPeriod`/`OpeningOverride` instead of `AvailabilitySlot`/
+`AvailabilityException` — an override fully determines its date, same as an
+exception here. The two implementations coexist because `appointments`' booking
+path still reads `availability` directly; `locations` isn't wired into booking
+yet. `availability` gets deleted once it is, not before — see §10.
+
 ---
 
 ## 6. The Pets Wire Contract: Matching the Target Envelope, Not Its Storage
@@ -533,3 +542,72 @@ exist to prove the journeys hold together end to end, the same reason
 `php-twig-mtier`'s "Portal" tests exist as their own distinct style (its
 `architecture-internals.md` §10) — narrower layers don't catch a wiring mistake
 that only shows up when several pieces run together for real.
+
+---
+
+## 10. `locations` Replaces Per-Vet `availability` — Eventually
+
+The target contract (`docs/petclinix-openapi-snapshot.json`) has no per-vet
+availability endpoints at all — only per-location ones, and its
+`BookableLocation` carries a single `vetUsername`, so a location belongs to
+exactly one vet. `locations` is the wire-compatible replacement: same
+weekly-template-plus-date-override shape as `availability` (§5), just
+re-homed under a location a vet explicitly creates (`POST /api/locations`)
+instead of a template attached to the vet directly, and a vet can now own
+several.
+
+### Not deleting `availability` yet
+
+`appointments`' booking path (`free_slots_for` in `appointments::handlers`)
+still reads `availability::model::read_weekly`/`find_exception_by_date`
+directly — it hasn't been rewired onto `locations` yet, so deleting
+`availability` now would break booking. Both slices' routes are live at once
+for now: `/api/vets/availability*` (old) and `/api/locations*` /
+`/api/owner/locations*` (new). `availability` gets deleted, and
+`appointments::slots` along with it, once booking itself moves onto
+`locations::slots::derive_free_slots` in a later pass.
+
+### Wire ids, the same way `pets` does it
+
+`Location.id` on the wire is `domain::wire_id(location.id)`, same derivation
+as `pets` (§6) — `Uuid` stays the storage key, `GET`/`PUT`/`DELETE
+/api/locations/{id}` resolve the wire id back to it via
+`model::find_by_vet_and_wire_id` (scoped to the calling vet — it's their own
+data) or `model::find_by_wire_id` (unscoped — an owner discovering a
+location to book doesn't know or care which vet it belongs to, the same way
+`GET /api/vets/{id}/slots` needs no ownership check today).
+
+### `dayOfWeek` as a wire integer, not an enum string
+
+Unlike this repo's other enums, the target contract's
+`OpeningPeriodResponse.dayOfWeek` is a plain `int32`, matching
+`java.time.DayOfWeek.getValue()`'s convention (Monday = 1 .. Sunday = 7).
+`locations::model::DayOfWeek` stays the same internal enum `availability`
+used, serialized `snake_case` for on-disk storage; `handlers.rs` converts at
+the boundary via `DayOfWeek::iso_number`/`from_iso_number` rather than
+teaching the type itself to serialize two different ways depending on
+context.
+
+### Interim approximation: a location's busy time is its vet's busy time
+
+`GET /owner/locations/{id}/available-slots` needs to know what's already
+booked at a location. `Appointment` doesn't carry a `location_id` yet (that
+lands when `appointments` itself moves onto the target contract), so
+`available_slots_blocking` uses the location's vet's *entire* active-
+appointment calendar as a stand-in — correct for a vet with exactly one
+location, over-blocks one running several, since a booking at location A
+would incorrectly also show as busy time at that same vet's location B. This
+is a known, temporary approximation, not a modeling decision to keep:
+revisit it in the same pass that adds `location_id` to `Appointment`.
+
+### `appointmentType` is accepted, not yet used
+
+The query param is required by the target contract and validated (an
+unrecognized value is rejected — via axum's own `Query` extractor
+rejection, so a 400, not the `Json` extractor's 422), but nothing in the
+domain model ties appointment type to slot duration, and `appointments`
+doesn't carry this field yet either. `#[allow(dead_code)]` on the field is
+deliberate, not an oversight: the parameter's presence and validation is the
+part of the contract being honored right now; folding it into the actual
+computation is future work once `appointments` needs the same enum
+(`domain::AppointmentType`).

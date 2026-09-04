@@ -43,7 +43,8 @@ src/
     registration/          # register + login, for both owner and vet roles
     vets_directory/          # read-only: list vets + specialties
     pets/                      # add/list/get/update/delete; owner-scoped; picture upload
-    availability/                # a vet's weekly schedule + one-off exceptions
+    availability/                # a vet's weekly schedule + one-off exceptions (being retired, see locations/)
+    locations/                     # a vet's clinic addresses + weekly opening periods + overrides
     appointments/                  # the core slice: booking, state machine, the flock lock
     visits/                          # a vet's diagnosis/vaccination/notes on a completed appointment
     admin/                             # user list/deactivate, activity log, stats
@@ -193,9 +194,16 @@ human-readable serde encoding (`"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS.f"`).
 | `GET /api/pets/{id}` | owner | pets |
 | `PUT /api/pets/{id}` | owner | pets |
 | `DELETE /api/pets/{id}` | owner | pets (soft delete — flips `active`) |
-| `POST /api/vets/availability` | vet | availability |
-| `POST /api/vets/availability/exceptions` | vet | availability |
+| `POST /api/vets/availability` | vet | availability (being retired, see locations) |
+| `POST /api/vets/availability/exceptions` | vet | availability (being retired, see locations) |
 | `GET /api/vets/{id}/slots?date=` | owner | appointments |
+| `GET /api/locations` | vet | locations (the caller's own) |
+| `POST /api/locations` | vet | locations |
+| `GET /api/locations/{id}` | vet | locations (the caller's own) |
+| `PUT /api/locations/{id}` | vet | locations (the caller's own) |
+| `DELETE /api/locations/{id}` | vet | locations (the caller's own; hard delete) |
+| `GET /api/owner/locations` | owner | locations (every vet's, for discovery) |
+| `GET /api/owner/locations/{id}/available-slots?date=&appointmentType=` | owner | locations |
 | `POST /api/appointments` | owner | appointments |
 | `GET /api/appointments` | owner, vet | appointments ("mine": own pets' / own calendar) |
 | `POST /api/appointments/{id}/cancel` | owner, vet | appointments (cutoff-gated) |
