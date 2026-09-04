@@ -82,10 +82,12 @@ fn seed() -> Fixture {
             id: pet_id,
             owner_id,
             name: "Rex".to_string(),
-            pet_type: "dog".to_string(),
+            species: pets::Species::Dog,
             breed: "Labrador".to_string(),
+            gender: pets::Gender::Male,
             birth_date: date!(2020 - 01 - 01),
             picture_content_type: "image/jpeg".to_string(),
+            is_active: true,
         },
     )
     .unwrap();

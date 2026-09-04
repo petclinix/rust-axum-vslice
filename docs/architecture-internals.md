@@ -323,21 +323,23 @@ not a hypothetical.
 
 ---
 
-## 6. The Pet-Picture Wire Contract: Matching `java`'s Envelope, Not Its Storage
+## 6. The Pets Wire Contract: Matching the Target Envelope, Not Its Storage
 
-`java-springboot-react-mtier`'s React frontend carries a pet's picture inline in
-the same JSON body as its other fields — `picture` (base64, no `data:` prefix) and
-`pictureContentType` — on both the create request and every response. To keep the
-door open to pointing that frontend at this backend (see the root `README.md`'s
-opt-in compose profile), `pets::handlers` matches that envelope exactly:
+`pets::handlers` matches `docs/petclinix-openapi-snapshot.json`'s `PetRequest`/
+`Pet` field-for-field — `species`/`gender` closed enums (`UPPERCASE` on the wire),
+camelCase `birthDate`/`pictureContentType`, and inline base64 `picture` (no
+`data:` prefix) on both the create/update request and every response:
 
 ```rust
 #[derive(Debug, Deserialize)]
 pub struct PetRequest {
     pub name: String,
-    #[serde(rename = "type")]
-    pub pet_type: String,
+    #[serde(default)]
+    pub species: Species,                     // defaults to Species::Other
     pub breed: String,
+    #[serde(default)]
+    pub gender: Gender,                       // defaults to Gender::Unknown
+    #[serde(rename = "birthDate")]
     pub birth_date: Date,
     pub picture: String,                      // base64, no `data:` prefix
     #[serde(rename = "pictureContentType")]
@@ -345,9 +347,12 @@ pub struct PetRequest {
 }
 ```
 
-Only `picture`/`pictureContentType` are camelCase — no attempt is made to match
-that frontend's other field names or enums, since those aren't part of the shared
-contract this is deliberately aligning with.
+`species`/`gender` default to their catch-all variant when omitted rather than
+being `Option`-wrapped — the target schema only requires `name`, and `Other`/
+`Unknown` already mean "not specified," so there's no third "absent" state to
+represent. An unrecognized enum value (e.g. `"species": "DRAGON"`) still 422s,
+same as any other malformed body — axum's `Json` extractor rejects it before the
+handler runs.
 
 Internally, the bytes never live in the small `pets/<id>.json` record — `uploads.rs`
 decodes the base64 once, validates it (content-type allowlist, a 5 MiB size cap),
@@ -359,12 +364,24 @@ pub struct Pet {
     pub id: Uuid,
     pub owner_id: Uuid,
     pub name: String,
-    pub pet_type: String,
+    pub species: Species,
     pub breed: String,
+    pub gender: Gender,
     pub birth_date: Date,
     pub picture_content_type: String,   // no `picture` field here
+    pub is_active: bool,                // DELETE /api/pets/{id} flips this
 }
 ```
+
+The response's `id` is `domain::wire_id(pet.id)` — a stable `int64` derived from
+the stored `Uuid` (its first 8 bytes, reinterpreted), matching the target
+contract's `integer(int64)` id type without this repo giving up `Uuid` as its
+storage key: no sequential counter, no extra lock, and existing data stays
+addressable across restarts since the mapping only ever depends on the `Uuid`
+itself. `GET`/`PUT`/`DELETE /api/pets/{id}` all take that `int64` as the path
+param and resolve it back to the owner's `Pet` via
+`model::find_by_owner_and_wire_id` — the same directory-scan cost every other
+collection read already pays, just scoped by the caller's own pets.
 
 The read path re-encodes those bytes to base64 when building the JSON response.
 This is a request/response envelope choice, not a storage choice: on disk it's

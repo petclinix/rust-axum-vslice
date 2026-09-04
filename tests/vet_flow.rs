@@ -45,9 +45,10 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .bearer_auth(&owner_token)
         .json(&json!({
             "name": "Whiskers",
-            "type": "cat",
+            "species": "CAT",
             "breed": "Siamese",
-            "birth_date": "2019-06-01",
+            "gender": "FEMALE",
+            "birthDate": "2019-06-01",
             "picture": "aGVsbG8=",
             "pictureContentType": "image/jpeg",
         }))
@@ -57,7 +58,7 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .json()
         .await
         .unwrap();
-    let pet_id = pet["id"].as_str().unwrap();
+    let pet_id = pet["id"].as_i64().unwrap();
 
     let booked: serde_json::Value = client
         .post(server.url("/api/appointments"))
@@ -134,8 +135,7 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .unwrap();
     assert_eq!(duplicate_visit.status(), 409);
 
-    // The owner sees it both via the dedicated endpoint and embedded in the
-    // pet detail view (`docs/architecture-internals.md` §6).
+    // The owner sees it via the dedicated visit-history endpoint.
     let owner_visits: serde_json::Value = client
         .get(server.url(&format!("/api/pets/{pet_id}/visits")))
         .bearer_auth(&owner_token)
@@ -157,5 +157,5 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .json()
         .await
         .unwrap();
-    assert_eq!(pet_detail["visits"].as_array().unwrap().len(), 1);
+    assert_eq!(pet_detail["name"], "Whiskers");
 }

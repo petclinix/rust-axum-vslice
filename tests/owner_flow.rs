@@ -57,9 +57,10 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
         .bearer_auth(&owner_token)
         .json(&json!({
             "name": "Rex",
-            "type": "dog",
+            "species": "DOG",
             "breed": "Labrador",
-            "birth_date": "2020-01-15",
+            "gender": "MALE",
+            "birthDate": "2020-01-15",
             "picture": "aGVsbG8=",
             "pictureContentType": "image/jpeg",
         }))
@@ -69,7 +70,7 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
         .json()
         .await
         .unwrap();
-    let pet_id = pet["id"].as_str().unwrap();
+    let pet_id = pet["id"].as_i64().unwrap();
 
     // Free slots for that Monday are the whole 9-17 window before booking.
     let free: serde_json::Value = client
@@ -133,7 +134,7 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
         .unwrap();
     assert_eq!(mine.as_array().unwrap().len(), 1);
 
-    // Pet detail includes (empty) visit history.
+    // Pet detail is reachable by its wire id.
     let pet_detail: serde_json::Value = client
         .get(server.url(&format!("/api/pets/{pet_id}")))
         .bearer_auth(&owner_token)
@@ -143,7 +144,7 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
         .json()
         .await
         .unwrap();
-    assert_eq!(pet_detail["visits"], json!([]));
+    assert_eq!(pet_detail["name"], "Rex");
 
     // Cancel — the booking is 4+ days out, well past the 24h cutoff.
     let cancel_response = client

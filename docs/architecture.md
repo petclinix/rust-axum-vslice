@@ -42,7 +42,7 @@ src/
   features/
     registration/          # register + login, for both owner and vet roles
     vets_directory/          # read-only: list vets + specialties
-    pets/                      # add/list/get/update; owner-scoped; picture upload
+    pets/                      # add/list/get/update/delete; owner-scoped; picture upload
     availability/                # a vet's weekly schedule + one-off exceptions
     appointments/                  # the core slice: booking, state machine, the flock lock
     visits/                          # a vet's diagnosis/vaccination/notes on a completed appointment
@@ -190,8 +190,9 @@ human-readable serde encoding (`"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS.f"`).
 | `GET /api/vets` | owner | vets_directory |
 | `GET /api/pets` | owner | pets |
 | `POST /api/pets` | owner | pets |
-| `GET /api/pets/{id}` | owner | pets (includes visit history, §6) |
+| `GET /api/pets/{id}` | owner | pets |
 | `PUT /api/pets/{id}` | owner | pets |
+| `DELETE /api/pets/{id}` | owner | pets (soft delete — flips `active`) |
 | `POST /api/vets/availability` | vet | availability |
 | `POST /api/vets/availability/exceptions` | vet | availability |
 | `GET /api/vets/{id}/slots?date=` | owner | appointments |

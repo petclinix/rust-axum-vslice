@@ -8,18 +8,45 @@ use serde::{Deserialize, Serialize};
 use time::Date;
 use uuid::Uuid;
 
+use crate::domain;
 use crate::storage;
+
+/// Closed enum on the wire (`docs/petclinix-openapi-snapshot.json`'s
+/// `PetRequest`/`Pet`), replacing this repo's earlier free-text `type`
+/// field — the target contract has no such field at all, `species` is the
+/// whole of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Species {
+    Dog,
+    Cat,
+    Bird,
+    Rabbit,
+    Reptile,
+    #[default]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Gender {
+    Male,
+    Female,
+    #[default]
+    Unknown,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pet {
     pub id: Uuid,
     pub owner_id: Uuid,
     pub name: String,
-    #[serde(rename = "type")]
-    pub pet_type: String,
+    pub species: Species,
     pub breed: String,
+    pub gender: Gender,
     pub birth_date: Date,
     pub picture_content_type: String,
+    pub is_active: bool,
 }
 
 fn pets_dir(data_dir: &Path) -> PathBuf {
@@ -46,6 +73,20 @@ pub fn list_pets_for_owner(data_dir: &Path, owner_id: Uuid) -> io::Result<Vec<Pe
         .collect())
 }
 
+/// Resolves a wire id (`domain::wire_id`) back to the `Pet` it was derived
+/// from, scoped to `owner_id` — the same directory scan `list_pets_for_owner`
+/// already does, just with an extra filter, since nothing here keeps an
+/// in-memory index between requests (`docs/architecture.md`'s Design
+/// Constraints).
+pub fn find_by_owner_and_wire_id(
+    data_dir: &Path,
+    owner_id: Uuid,
+    wire_id: i64,
+) -> io::Result<Option<Pet>> {
+    let pets = list_pets_for_owner(data_dir, owner_id)?;
+    Ok(pets.into_iter().find(|p| domain::wire_id(p.id) == wire_id))
+}
+
 /// Cross-slice: `admin::stats` needs the total pet count across every
 /// owner.
 pub fn list_all(data_dir: &Path) -> io::Result<Vec<Pet>> {
@@ -62,10 +103,12 @@ mod tests {
             id: Uuid::new_v4(),
             owner_id,
             name: "Rex".to_string(),
-            pet_type: "dog".to_string(),
+            species: Species::Dog,
             breed: "Labrador".to_string(),
+            gender: Gender::Male,
             birth_date: date!(2020 - 01 - 15),
             picture_content_type: "image/jpeg".to_string(),
+            is_active: true,
         }
     }
 
@@ -116,12 +159,29 @@ mod tests {
     }
 
     #[test]
-    fn pet_type_serializes_as_bare_type_field() {
+    fn species_and_gender_serialize_uppercase() {
         let pet = sample_pet(Uuid::new_v4());
 
         let json = serde_json::to_value(&pet).unwrap();
 
-        assert_eq!(json["type"], "dog");
-        assert!(json.get("pet_type").is_none());
+        assert_eq!(json["species"], "DOG");
+        assert_eq!(json["gender"], "MALE");
+    }
+
+    #[test]
+    fn find_by_owner_and_wire_id_matches_and_no_match_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let owner_id = Uuid::new_v4();
+        let pet = sample_pet(owner_id);
+        write_pet(dir.path(), &pet).unwrap();
+
+        assert_eq!(
+            find_by_owner_and_wire_id(dir.path(), owner_id, domain::wire_id(pet.id)).unwrap(),
+            Some(pet)
+        );
+        assert_eq!(
+            find_by_owner_and_wire_id(dir.path(), owner_id, 123456).unwrap(),
+            None
+        );
     }
 }

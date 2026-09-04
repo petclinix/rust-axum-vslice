@@ -21,6 +21,8 @@ pub fn router() -> Router<Config> {
         )
         .route(
             "/api/pets/{id}",
-            get(handlers::get_pet).put(handlers::update_pet),
+            get(handlers::get_pet)
+                .put(handlers::update_pet)
+                .delete(handlers::delete_pet),
         )
 }

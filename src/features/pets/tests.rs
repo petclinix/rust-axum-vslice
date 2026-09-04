@@ -87,10 +87,15 @@ async fn call(
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
+    // A malformed-body rejection from axum's `Json` extractor itself (e.g.
+    // an unknown enum variant) never reaches `AppError` — it's plain text,
+    // not the usual `{error, code}` shape, so fall back to it as a string
+    // rather than unwrapping a JSON parse that was never going to succeed.
     let json = if bytes.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).unwrap()
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
     };
     (status, json)
 }
@@ -98,9 +103,10 @@ async fn call(
 fn pet_payload(name: &str) -> Value {
     json!({
         "name": name,
-        "type": "dog",
+        "species": "DOG",
         "breed": "Labrador",
-        "birth_date": "2020-01-15",
+        "gender": "MALE",
+        "birthDate": "2020-01-15",
         "picture": BASE64.encode(b"fake image bytes"),
         "pictureContentType": "image/jpeg",
     })
@@ -157,12 +163,58 @@ async fn add_pet_returns_201_with_the_decoded_picture_re_encoded() {
 
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["name"], "Rex");
-    assert_eq!(body["type"], "dog");
+    assert_eq!(body["species"], "DOG");
+    assert_eq!(body["gender"], "MALE");
     assert_eq!(body["pictureContentType"], "image/jpeg");
+    assert_eq!(body["active"], true);
+    assert!(body["id"].is_i64());
     assert_eq!(
         BASE64.decode(body["picture"].as_str().unwrap()).unwrap(),
         b"fake image bytes"
     );
+}
+
+#[tokio::test]
+async fn add_pet_defaults_species_and_gender_when_omitted() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::for_test(dir.path().to_path_buf());
+    let owner = seed_user(dir.path(), &config.jwt_secret, Role::Owner);
+    let mut payload = pet_payload("Rex");
+    payload.as_object_mut().unwrap().remove("species");
+    payload.as_object_mut().unwrap().remove("gender");
+
+    let (status, body) = call(
+        app_for(dir.path()),
+        "POST",
+        "/api/pets",
+        Some(&owner.token),
+        Some(payload),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["species"], "OTHER");
+    assert_eq!(body["gender"], "UNKNOWN");
+}
+
+#[tokio::test]
+async fn add_pet_with_an_unknown_species_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::for_test(dir.path().to_path_buf());
+    let owner = seed_user(dir.path(), &config.jwt_secret, Role::Owner);
+    let mut payload = pet_payload("Rex");
+    payload["species"] = json!("DRAGON");
+
+    let (status, _) = call(
+        app_for(dir.path()),
+        "POST",
+        "/api/pets",
+        Some(&owner.token),
+        Some(payload),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -258,7 +310,7 @@ async fn get_pet_returns_it() {
         Some(pet_payload("Rex")),
     )
     .await;
-    let pet_id = created["id"].as_str().unwrap();
+    let pet_id = created["id"].as_i64().unwrap();
 
     let (status, body) = call(
         app_for(dir.path()),
@@ -282,7 +334,7 @@ async fn get_missing_pet_is_not_found() {
     let (status, body) = call(
         app_for(dir.path()),
         "GET",
-        &format!("/api/pets/{}", Uuid::new_v4()),
+        "/api/pets/999999999",
         Some(&owner.token),
         None,
     )
@@ -306,7 +358,7 @@ async fn get_pet_owned_by_someone_else_is_not_found() {
         Some(pet_payload("Rex")),
     )
     .await;
-    let pet_id = created["id"].as_str().unwrap();
+    let pet_id = created["id"].as_i64().unwrap();
 
     let (status, body) = call(
         app_for(dir.path()),
@@ -334,7 +386,7 @@ async fn update_pet_changes_fields_and_picture() {
         Some(pet_payload("Rex")),
     )
     .await;
-    let pet_id = created["id"].as_str().unwrap();
+    let pet_id = created["id"].as_i64().unwrap();
 
     let mut update = pet_payload("Rex the Second");
     update["picture"] = json!(BASE64.encode(b"updated bytes"));
@@ -357,6 +409,70 @@ async fn update_pet_changes_fields_and_picture() {
 }
 
 #[tokio::test]
+async fn delete_pet_deactivates_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::for_test(dir.path().to_path_buf());
+    let owner = seed_user(dir.path(), &config.jwt_secret, Role::Owner);
+    let (_, created) = call(
+        app_for(dir.path()),
+        "POST",
+        "/api/pets",
+        Some(&owner.token),
+        Some(pet_payload("Rex")),
+    )
+    .await;
+    let pet_id = created["id"].as_i64().unwrap();
+
+    let (status, _) = call(
+        app_for(dir.path()),
+        "DELETE",
+        &format!("/api/pets/{pet_id}"),
+        Some(&owner.token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body) = call(
+        app_for(dir.path()),
+        "GET",
+        &format!("/api/pets/{pet_id}"),
+        Some(&owner.token),
+        None,
+    )
+    .await;
+    assert_eq!(body["active"], false);
+}
+
+#[tokio::test]
+async fn delete_pet_owned_by_someone_else_is_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::for_test(dir.path().to_path_buf());
+    let alice = seed_user(dir.path(), &config.jwt_secret, Role::Owner);
+    let bob = seed_user(dir.path(), &config.jwt_secret, Role::Owner);
+    let (_, created) = call(
+        app_for(dir.path()),
+        "POST",
+        "/api/pets",
+        Some(&alice.token),
+        Some(pet_payload("Rex")),
+    )
+    .await;
+    let pet_id = created["id"].as_i64().unwrap();
+
+    let (status, _) = call(
+        app_for(dir.path()),
+        "DELETE",
+        &format!("/api/pets/{pet_id}"),
+        Some(&bob.token),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn update_pet_owned_by_someone_else_is_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config::for_test(dir.path().to_path_buf());
@@ -370,7 +486,7 @@ async fn update_pet_owned_by_someone_else_is_not_found() {
         Some(pet_payload("Rex")),
     )
     .await;
-    let pet_id = created["id"].as_str().unwrap();
+    let pet_id = created["id"].as_i64().unwrap();
 
     let (status, _) = call(
         app_for(dir.path()),

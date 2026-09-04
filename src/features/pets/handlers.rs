@@ -9,21 +9,22 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::config::Config;
-use crate::domain::Role;
+use crate::domain::{self, Role};
 use crate::error::AppError;
-use crate::features::appointments::model as appointments;
 use crate::features::registration::model as registration;
-use crate::features::visits::VisitResponse;
-use crate::features::visits::model as visits;
 
-use super::{model, uploads};
+use super::model::{self, Gender, Species};
+use super::uploads;
 
 #[derive(Debug, Deserialize)]
 pub struct PetRequest {
     pub name: String,
-    #[serde(rename = "type")]
-    pub pet_type: String,
+    #[serde(default)]
+    pub species: Species,
     pub breed: String,
+    #[serde(default)]
+    pub gender: Gender,
+    #[serde(rename = "birthDate")]
     pub birth_date: Date,
     /// Base64, no `data:` prefix — matches `java-springboot-react-mtier`'s
     /// wire contract (`docs/architecture-internals.md` §6).
@@ -34,26 +35,17 @@ pub struct PetRequest {
 
 #[derive(Debug, Serialize)]
 pub struct PetResponse {
-    pub id: Uuid,
+    pub id: i64,
     pub name: String,
-    #[serde(rename = "type")]
-    pub pet_type: String,
+    pub species: Species,
     pub breed: String,
+    pub gender: Gender,
+    #[serde(rename = "birthDate")]
     pub birth_date: Date,
     pub picture: String,
     #[serde(rename = "pictureContentType")]
     pub picture_content_type: String,
-}
-
-/// `GET /api/pets/{id}` specifically includes visit history (see
-/// `docs/architecture.md`'s API Surface section);
-/// list/add/update don't, so this stays a separate shape from
-/// `PetResponse` rather than an always-present-but-usually-empty field.
-#[derive(Debug, Serialize)]
-pub struct PetDetailResponse {
-    #[serde(flatten)]
-    pub pet: PetResponse,
-    pub visits: Vec<VisitResponse>,
+    pub active: bool,
 }
 
 fn require_owner(auth: &AuthUser) -> Result<(), AppError> {
@@ -69,9 +61,6 @@ fn validate_pet_request(req: &PetRequest) -> Result<(), AppError> {
     if req.name.trim().is_empty() {
         return Err(AppError::Validation("name is required".to_string()));
     }
-    if req.pet_type.trim().is_empty() {
-        return Err(AppError::Validation("type is required".to_string()));
-    }
     Ok(())
 }
 
@@ -83,13 +72,15 @@ fn resolve_owner_id(data_dir: &Path, user_id: Uuid) -> Result<Uuid, AppError> {
 
 fn to_response(pet: model::Pet, picture: Vec<u8>) -> PetResponse {
     PetResponse {
-        id: pet.id,
+        id: domain::wire_id(pet.id),
         name: pet.name,
-        pet_type: pet.pet_type,
+        species: pet.species,
         breed: pet.breed,
+        gender: pet.gender,
         birth_date: pet.birth_date,
         picture: uploads::encode_base64(&picture),
         picture_content_type: pet.picture_content_type,
+        active: pet.is_active,
     }
 }
 
@@ -124,10 +115,12 @@ fn add_pet_blocking(
         id: Uuid::new_v4(),
         owner_id,
         name: req.name,
-        pet_type: req.pet_type,
+        species: req.species,
         breed: req.breed,
+        gender: req.gender,
         birth_date: req.birth_date,
         picture_content_type: req.picture_content_type.clone(),
+        is_active: true,
     };
     model::write_pet(data_dir, &pet)?;
     uploads::write_picture(data_dir, pet.id, &req.picture_content_type, &picture_bytes)?;
@@ -165,8 +158,8 @@ fn list_pets_blocking(data_dir: &Path, user_id: Uuid) -> Result<Vec<PetResponse>
 pub async fn get_pet(
     State(config): State<Config>,
     auth: AuthUser,
-    PathParam(pet_id): PathParam<Uuid>,
-) -> Result<Json<PetDetailResponse>, AppError> {
+    PathParam(pet_id): PathParam<i64>,
+) -> Result<Json<PetResponse>, AppError> {
     require_owner(&auth)?;
 
     let data_dir = config.data_dir.clone();
@@ -178,39 +171,19 @@ pub async fn get_pet(
     Ok(Json(response))
 }
 
-/// Visit history: every completed appointment for this pet
-/// that has a recorded visit — a cross-slice read into both `appointments`
-/// and `visits` (`docs/architecture.md` Design Constraint 5).
-fn get_pet_blocking(
-    data_dir: &Path,
-    user_id: Uuid,
-    pet_id: Uuid,
-) -> Result<PetDetailResponse, AppError> {
+fn get_pet_blocking(data_dir: &Path, user_id: Uuid, pet_id: i64) -> Result<PetResponse, AppError> {
     let owner_id = resolve_owner_id(data_dir, user_id)?;
     let pet = load_owned_pet(data_dir, owner_id, pet_id)?;
     let picture =
         uploads::read_picture(data_dir, pet.id, &pet.picture_content_type)?.unwrap_or_default();
 
-    let appointment_ids: Vec<Uuid> = appointments::read_all(data_dir)?
-        .into_iter()
-        .filter(|a| a.pet_id == pet_id)
-        .map(|a| a.id)
-        .collect();
-    let pet_visits = visits::find_all_for_appointments(data_dir, &appointment_ids)?
-        .into_iter()
-        .map(VisitResponse::from)
-        .collect();
-
-    Ok(PetDetailResponse {
-        pet: to_response(pet, picture),
-        visits: pet_visits,
-    })
+    Ok(to_response(pet, picture))
 }
 
 pub async fn update_pet(
     State(config): State<Config>,
     auth: AuthUser,
-    PathParam(pet_id): PathParam<Uuid>,
+    PathParam(pet_id): PathParam<i64>,
     Json(req): Json<PetRequest>,
 ) -> Result<Json<PetResponse>, AppError> {
     require_owner(&auth)?;
@@ -230,7 +203,7 @@ pub async fn update_pet(
 fn update_pet_blocking(
     data_dir: &Path,
     user_id: Uuid,
-    pet_id: Uuid,
+    pet_id: i64,
     req: PetRequest,
     picture_bytes: Vec<u8>,
 ) -> Result<PetResponse, AppError> {
@@ -238,8 +211,9 @@ fn update_pet_blocking(
     let mut pet = load_owned_pet(data_dir, owner_id, pet_id)?;
 
     pet.name = req.name;
-    pet.pet_type = req.pet_type;
+    pet.species = req.species;
     pet.breed = req.breed;
+    pet.gender = req.gender;
     pet.birth_date = req.birth_date;
     pet.picture_content_type = req.picture_content_type.clone();
 
@@ -249,15 +223,39 @@ fn update_pet_blocking(
     Ok(to_response(pet, picture_bytes))
 }
 
-/// Loads a pet and checks it belongs to `owner_id` in one place — a pet that
-/// exists but belongs to someone else must look identical to a missing one,
-/// not leak its existence via a different status code.
-fn load_owned_pet(data_dir: &Path, owner_id: Uuid, pet_id: Uuid) -> Result<model::Pet, AppError> {
-    let pet = model::read_pet(data_dir, pet_id)?.ok_or_else(pet_not_found)?;
-    if pet.owner_id != owner_id {
-        return Err(pet_not_found());
-    }
-    Ok(pet)
+pub async fn delete_pet(
+    State(config): State<Config>,
+    auth: AuthUser,
+    PathParam(pet_id): PathParam<i64>,
+) -> Result<StatusCode, AppError> {
+    require_owner(&auth)?;
+
+    let data_dir = config.data_dir.clone();
+    tokio::task::spawn_blocking(move || delete_pet_blocking(&data_dir, auth.id, pet_id))
+        .await
+        .map_err(|_| AppError::Internal)??;
+
+    Ok(StatusCode::OK)
+}
+
+/// Soft delete — flips `is_active` rather than removing the file, matching
+/// the target contract's `Pet.active` flag and this repo's existing
+/// soft-delete idiom for users (`admin::users::deactivate_user`).
+/// Idempotent, same rationale as that handler.
+fn delete_pet_blocking(data_dir: &Path, user_id: Uuid, pet_id: i64) -> Result<(), AppError> {
+    let owner_id = resolve_owner_id(data_dir, user_id)?;
+    let mut pet = load_owned_pet(data_dir, owner_id, pet_id)?;
+    pet.is_active = false;
+    model::write_pet(data_dir, &pet)?;
+    Ok(())
+}
+
+/// Loads a pet by its wire id and checks it belongs to `owner_id` in one
+/// place — a pet that exists but belongs to someone else must look
+/// identical to a missing one, not leak its existence via a different
+/// status code.
+fn load_owned_pet(data_dir: &Path, owner_id: Uuid, pet_id: i64) -> Result<model::Pet, AppError> {
+    model::find_by_owner_and_wire_id(data_dir, owner_id, pet_id)?.ok_or_else(pet_not_found)
 }
 
 fn pet_not_found() -> AppError {
