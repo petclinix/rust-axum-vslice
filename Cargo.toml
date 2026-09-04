@@ -23,3 +23,7 @@ base64 = "0.22"
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
 time = { version = "0.3", features = ["macros"] }
+# No TLS backend feature: black-box tests only ever hit a `127.0.0.1` test
+# server over plain HTTP, so pulling in native-tls/rustls would just add
+# build weight (and a system OpenSSL dependency) for nothing.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
