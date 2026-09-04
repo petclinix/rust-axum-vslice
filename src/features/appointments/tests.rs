@@ -171,10 +171,16 @@ async fn call(
 }
 
 fn book_payload(fixture: &Fixture, time_slot: time::PrimitiveDateTime) -> Value {
+    // Serialize via serde (`json!` calls `Serialize`, not `Display`) so this
+    // produces exactly the zero-padded wire format the server's own
+    // `Deserialize` impl expects. `PrimitiveDateTime`'s `Display` (i.e.
+    // `.to_string()`) does *not* zero-pad a single-digit hour the way its
+    // `Serialize` impl does — using it here intermittently broke this
+    // payload once a day, for whichever hour happened to be single-digit.
     json!({
         "pet_id": fixture.pet_id,
         "vet_id": fixture.vet_id,
-        "time_slot": time_slot.to_string(),
+        "time_slot": time_slot,
         "duration_minutes": 30,
     })
 }
