@@ -50,7 +50,7 @@ fn seed() -> Fixture {
         data_dir,
         &registration::User {
             id: admin_user_id,
-            email: "admin@petclinix.local".to_string(),
+            username: "admin@petclinix.local".to_string(),
             password_hash: "unused".to_string(),
             role: Role::Admin,
             is_active: true,
@@ -67,7 +67,7 @@ fn seed() -> Fixture {
         data_dir,
         &registration::User {
             id: owner_user_id,
-            email: "owner@example.com".to_string(),
+            username: "owner@example.com".to_string(),
             password_hash: "unused".to_string(),
             role: Role::Owner,
             is_active: true,
@@ -263,14 +263,12 @@ async fn list_activity_reflects_events_recorded_by_other_slices() {
     call(
         fixture.app(),
         "POST",
-        "/api/auth/register",
+        "/api/users/register",
         None,
         Some(json!({
-            "email": "newowner@example.com",
+            "username": "newowner@example.com",
             "password": "correct horse",
-            "role": "owner",
-            "name": "Charlie",
-            "phone": "555-0111",
+            "type": "OWNER",
         })),
     )
     .await;
@@ -298,14 +296,12 @@ async fn list_activity_with_a_date_filter_returns_todays_events() {
     call(
         fixture.app(),
         "POST",
-        "/api/auth/register",
+        "/api/users/register",
         None,
         Some(json!({
-            "email": "newowner2@example.com",
+            "username": "newowner2@example.com",
             "password": "correct horse",
-            "role": "owner",
-            "name": "Dana",
-            "phone": "555-0112",
+            "type": "OWNER",
         })),
     )
     .await;

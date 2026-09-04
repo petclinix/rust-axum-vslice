@@ -7,78 +7,71 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::auth::{password, token};
+use crate::auth::{AuthUser, password, token};
 use crate::config::Config;
-use crate::domain::Role;
+use crate::domain::{self, Role};
 use crate::error::AppError;
 use crate::features::admin::activity;
 use crate::storage;
 
 use super::model;
 
+/// Matches the target contract's `RegisterRequest`
+/// (`docs/petclinix-openapi-snapshot.json`) exactly — it carries no profile
+/// fields (name/phone/specialty) beyond `username`/`password`/`type`, so
+/// `register_locked` fills the internal `Owner`/`Vet` profile's `name` with
+/// the username and leaves `phone`/`specialty` blank; nothing in the target
+/// contract ever reads those back.
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
-    pub email: String,
+    pub username: String,
     pub password: String,
+    #[serde(rename = "type")]
     pub role: Role,
-    pub name: String,
-    #[serde(default)]
-    pub phone: Option<String>,
-    #[serde(default)]
-    pub specialty: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RegisterResponse {
-    pub id: Uuid,
-    pub email: String,
+    pub id: i64,
+    pub username: String,
     pub role: Role,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
-    pub email: String,
+    pub username: String,
     pub password: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub token: String,
+    #[serde(rename = "type")]
+    pub token_type: String,
+}
+
+/// `GET /api/users/aboutme`'s response shape — also what a login-response
+/// envelope's `UserResponse` counterpart in the target contract looks like.
+#[derive(Debug, Serialize)]
+pub struct UserResponse {
+    pub id: i64,
+    pub username: String,
+    pub role: Role,
 }
 
 fn validate_register_request(req: &RegisterRequest) -> Result<(), AppError> {
     if req.role == Role::Admin {
         return Err(AppError::Validation(
-            "role must be owner or vet".to_string(),
+            "type must be OWNER or VET".to_string(),
         ));
     }
-    if !req.email.contains('@') || req.email.trim().is_empty() {
-        return Err(AppError::Validation("email is invalid".to_string()));
+    if req.username.trim().is_empty() {
+        return Err(AppError::Validation("username is required".to_string()));
     }
     if req.password.len() < 8 {
         return Err(AppError::Validation(
             "password must be at least 8 characters".to_string(),
         ));
-    }
-    if req.name.trim().is_empty() {
-        return Err(AppError::Validation("name is required".to_string()));
-    }
-    match req.role {
-        Role::Owner => {
-            if req.phone.as_deref().unwrap_or("").trim().is_empty() {
-                return Err(AppError::Validation(
-                    "phone is required for owners".to_string(),
-                ));
-            }
-        }
-        Role::Vet => {
-            if req.specialty.as_deref().unwrap_or("").trim().is_empty() {
-                return Err(AppError::Validation(
-                    "specialty is required for vets".to_string(),
-                ));
-            }
-        }
-        Role::Admin => unreachable!("rejected above"),
     }
     Ok(())
 }
@@ -104,15 +97,15 @@ pub async fn register(
 fn register_locked(data_dir: &Path, req: RegisterRequest) -> Result<RegisterResponse, AppError> {
     let _lock = storage::FileLock::exclusive(&model::users_lock_path(data_dir))?;
 
-    if model::find_user_by_email(data_dir, &req.email)?.is_some() {
-        return Err(AppError::EmailTaken);
+    if model::find_user_by_username(data_dir, &req.username)?.is_some() {
+        return Err(AppError::UsernameTaken);
     }
 
     let password_hash = password::hash(&req.password).map_err(|_| AppError::Internal)?;
 
     let user = model::User {
         id: Uuid::new_v4(),
-        email: req.email.clone(),
+        username: req.username.clone(),
         password_hash,
         role: req.role,
         is_active: true,
@@ -126,8 +119,8 @@ fn register_locked(data_dir: &Path, req: RegisterRequest) -> Result<RegisterResp
             let owner = model::Owner {
                 id: Uuid::new_v4(),
                 user_id: user.id,
-                name: req.name,
-                phone: req.phone.unwrap_or_default(),
+                name: req.username.clone(),
+                phone: String::new(),
             };
             model::write_owner(data_dir, &owner)?;
         }
@@ -135,8 +128,8 @@ fn register_locked(data_dir: &Path, req: RegisterRequest) -> Result<RegisterResp
             let vet = model::Vet {
                 id: Uuid::new_v4(),
                 user_id: user.id,
-                name: req.name,
-                specialty: req.specialty.unwrap_or_default(),
+                name: req.username.clone(),
+                specialty: String::new(),
             };
             model::write_vet(data_dir, &vet)?;
         }
@@ -155,8 +148,8 @@ fn register_locked(data_dir: &Path, req: RegisterRequest) -> Result<RegisterResp
     }
 
     Ok(RegisterResponse {
-        id: user.id,
-        email: user.email,
+        id: domain::wire_id(user.id),
+        username: user.username,
         role: user.role,
     })
 }
@@ -173,7 +166,10 @@ pub async fn login(
     let token = token::issue(&config.jwt_secret, &user.id.to_string(), user.role)
         .map_err(|_| AppError::Internal)?;
 
-    Ok(Json(LoginResponse { token }))
+    Ok(Json(LoginResponse {
+        token,
+        token_type: "Bearer".to_string(),
+    }))
 }
 
 /// Same blocking-task rationale as `register_locked`. Only the lookup is
@@ -183,7 +179,7 @@ pub async fn login(
 fn login_locked(data_dir: &Path, req: LoginRequest) -> Result<model::User, AppError> {
     let found = {
         let _lock = storage::FileLock::shared(&model::users_lock_path(data_dir))?;
-        model::find_user_by_email(data_dir, &req.email)?
+        model::find_user_by_username(data_dir, &req.username)?
     };
 
     let mut user = found.ok_or(AppError::InvalidCredentials)?;
@@ -195,7 +191,7 @@ fn login_locked(data_dir: &Path, req: LoginRequest) -> Result<model::User, AppEr
     }
 
     // Checked only after a successful password match, so a request with the
-    // wrong password can't be used to probe whether an email belongs to a
+    // wrong password can't be used to probe whether a username belongs to a
     // deactivated account.
     if !user.is_active {
         return Err(AppError::AccountDeactivated);
@@ -213,4 +209,24 @@ fn login_locked(data_dir: &Path, req: LoginRequest) -> Result<model::User, AppEr
     }
 
     Ok(user)
+}
+
+/// `GET /api/users/aboutme` — "who am I", from the caller's own verified
+/// JWT. The token carries `sub`/`role` only (`auth::token::Claims`), so
+/// this still needs one read to fill in `username`.
+pub async fn aboutme(
+    State(config): State<Config>,
+    auth: AuthUser,
+) -> Result<Json<UserResponse>, AppError> {
+    let data_dir = config.data_dir.clone();
+    let user = tokio::task::spawn_blocking(move || model::read_user(&data_dir, auth.id))
+        .await
+        .map_err(|_| AppError::Internal)??
+        .ok_or(AppError::Unauthenticated)?;
+
+    Ok(Json(UserResponse {
+        id: domain::wire_id(user.id),
+        username: user.username,
+        role: user.role,
+    }))
 }

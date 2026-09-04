@@ -17,10 +17,7 @@ async fn admin_can_manage_users_and_read_stats_and_activity() {
     let admin_token = server.admin_token().await;
 
     let regular_owner_token = server
-        .register_and_login(
-            "someoneelse@example.com",
-            json!({"role": "owner", "phone": "555-0199"}),
-        )
+        .register_and_login("someoneelse@example.com", json!({"type": "OWNER"}))
         .await;
 
     // A non-admin gets 403 from every admin endpoint.
@@ -35,10 +32,7 @@ async fn admin_can_manage_users_and_read_stats_and_activity() {
     // `register_and_login` already asserts login succeeds while the account
     // is still active — no need to keep the token around for that.
     server
-        .register_and_login(
-            "toDeactivate@example.com",
-            json!({"role": "owner", "phone": "555-0100"}),
-        )
+        .register_and_login("toDeactivate@example.com", json!({"type": "OWNER"}))
         .await;
 
     let users: serde_json::Value = client
@@ -54,7 +48,7 @@ async fn admin_can_manage_users_and_read_stats_and_activity() {
     assert_eq!(users.len(), 3, "seeded admin + two registered owners");
     let target = users
         .iter()
-        .find(|u| u["email"] == "toDeactivate@example.com")
+        .find(|u| u["username"] == "toDeactivate@example.com")
         .expect("registered owner should be listed");
     let user_id = target["id"].as_str().unwrap();
 
@@ -99,7 +93,7 @@ async fn admin_can_manage_users_and_read_stats_and_activity() {
 
     let blocked_login = client
         .post(server.url("/api/auth/login"))
-        .json(&json!({"email": "toDeactivate@example.com", "password": "correct horse"}))
+        .json(&json!({"username": "toDeactivate@example.com", "password": "correct horse"}))
         .send()
         .await
         .unwrap();

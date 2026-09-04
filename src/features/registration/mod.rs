@@ -7,12 +7,13 @@ pub mod model;
 mod tests;
 
 use axum::Router;
-use axum::routing::post;
+use axum::routing::{get, post};
 
 use crate::config::Config;
 
 pub fn router() -> Router<Config> {
     Router::new()
-        .route("/api/auth/register", post(handlers::register))
+        .route("/api/users/register", post(handlers::register))
         .route("/api/auth/login", post(handlers::login))
+        .route("/api/users/aboutme", get(handlers::aboutme))
 }

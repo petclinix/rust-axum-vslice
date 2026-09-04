@@ -13,16 +13,10 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
     let client = server.client();
 
     let vet_token = server
-        .register_and_login(
-            "vet@example.com",
-            json!({"role": "vet", "specialty": "Dentistry"}),
-        )
+        .register_and_login("vet@example.com", json!({"type": "VET"}))
         .await;
     let owner_token = server
-        .register_and_login(
-            "owner@example.com",
-            json!({"role": "owner", "phone": "555-0100"}),
-        )
+        .register_and_login("owner@example.com", json!({"type": "OWNER"}))
         .await;
 
     client

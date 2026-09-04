@@ -30,9 +30,10 @@ docker compose up --build
 
 Then visit http://localhost:8080/health.
 
-Owners and vets self-register via `POST /api/auth/register`. The admin account is
-seeded on first boot (never self-registered): `admin@petclinix.local` /
-`admin12345`, the same fixed credentials `php-twig-mtier` seeds its admin with.
+Owners and vets self-register via `POST /api/users/register`. The admin account is
+seeded on first boot (never self-registered): username `admin@petclinix.local` /
+password `admin12345`, the same fixed credentials `php-twig-mtier` seeds its admin
+with.
 
 ### Optional: with the React frontend
 

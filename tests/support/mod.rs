@@ -70,28 +70,26 @@ impl TestServer {
         &self.client
     }
 
-    /// Registers a user (merging `extra` — e.g. `{"role": "owner", "phone":
-    /// "555-0100"}` — into the request body) then logs in, returning the
-    /// bearer token. The password is fixed across every call; nothing here
-    /// needs it to vary.
-    pub async fn register_and_login(&self, email: &str, extra: Value) -> String {
+    /// Registers a user (merging `extra` — e.g. `{"type": "OWNER"}` — into
+    /// the request body) then logs in, returning the bearer token. The
+    /// password is fixed across every call; nothing here needs it to vary.
+    pub async fn register_and_login(&self, username: &str, extra: Value) -> String {
         let mut body = json!({
-            "email": email,
+            "username": username,
             "password": "correct horse",
-            "name": "Test User",
         });
         merge(&mut body, extra);
 
         let register = self
             .client
-            .post(self.url("/api/auth/register"))
+            .post(self.url("/api/users/register"))
             .json(&body)
             .send()
             .await
             .expect("register request failed");
         assert!(
             register.status().is_success(),
-            "registration for {email} failed: {} {}",
+            "registration for {username} failed: {} {}",
             register.status(),
             register.text().await.unwrap_or_default()
         );
@@ -99,7 +97,7 @@ impl TestServer {
         let login: Value = self
             .client
             .post(self.url("/api/auth/login"))
-            .json(&json!({"email": email, "password": "correct horse"}))
+            .json(&json!({"username": username, "password": "correct horse"}))
             .send()
             .await
             .expect("login request failed")
@@ -117,7 +115,7 @@ impl TestServer {
         let login: Value = self
             .client
             .post(self.url("/api/auth/login"))
-            .json(&json!({"email": "admin@petclinix.local", "password": "admin12345"}))
+            .json(&json!({"username": "admin@petclinix.local", "password": "admin12345"}))
             .send()
             .await
             .expect("admin login request failed")

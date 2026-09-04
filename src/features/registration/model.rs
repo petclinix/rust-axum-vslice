@@ -16,7 +16,7 @@ use crate::storage;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct User {
     pub id: Uuid,
-    pub email: String,
+    pub username: String,
     pub password_hash: String,
     pub role: Role,
     pub is_active: bool,
@@ -66,8 +66,8 @@ fn vet_path(data_dir: &Path, id: Uuid) -> PathBuf {
     vets_dir(data_dir).join(format!("{id}.json"))
 }
 
-/// The registration slice's own lock: register-time email-uniqueness check +
-/// write (see `docs/architecture.md`'s Design Constraints).
+/// The registration slice's own lock: register-time username-uniqueness
+/// check + write (see `docs/architecture.md`'s Design Constraints).
 pub fn users_lock_path(data_dir: &Path) -> PathBuf {
     data_dir.join("locks").join("users.lock")
 }
@@ -86,13 +86,13 @@ pub fn list_all_users(data_dir: &Path) -> io::Result<Vec<User>> {
     storage::list_dir_json(&users_dir(data_dir))
 }
 
-/// Case-insensitive — email uniqueness must not depend on how a client
-/// capitalizes the address it types in.
-pub fn find_user_by_email(data_dir: &Path, email: &str) -> io::Result<Option<User>> {
+/// Case-insensitive — username uniqueness must not depend on how a client
+/// capitalizes what it types in.
+pub fn find_user_by_username(data_dir: &Path, username: &str) -> io::Result<Option<User>> {
     let users: Vec<User> = storage::list_dir_json(&users_dir(data_dir))?;
     Ok(users
         .into_iter()
-        .find(|u| u.email.eq_ignore_ascii_case(email)))
+        .find(|u| u.username.eq_ignore_ascii_case(username)))
 }
 
 pub fn write_owner(data_dir: &Path, owner: &Owner) -> io::Result<()> {
@@ -131,10 +131,10 @@ pub fn list_all_vets(data_dir: &Path) -> io::Result<Vec<Vet>> {
 mod tests {
     use super::*;
 
-    fn sample_user(email: &str) -> User {
+    fn sample_user(username: &str) -> User {
         User {
             id: Uuid::new_v4(),
-            email: email.to_string(),
+            username: username.to_string(),
             password_hash: "hash".to_string(),
             role: Role::Owner,
             is_active: true,
@@ -144,12 +144,12 @@ mod tests {
     }
 
     #[test]
-    fn write_user_then_find_by_email_is_case_insensitive() {
+    fn write_user_then_find_by_username_is_case_insensitive() {
         let dir = tempfile::tempdir().unwrap();
-        let user = sample_user("Owner@Example.com");
+        let user = sample_user("Owner_Example");
         write_user(dir.path(), &user).unwrap();
 
-        let found = find_user_by_email(dir.path(), "owner@example.com")
+        let found = find_user_by_username(dir.path(), "owner_example")
             .unwrap()
             .unwrap();
 
@@ -157,14 +157,11 @@ mod tests {
     }
 
     #[test]
-    fn find_user_by_email_no_match_returns_none() {
+    fn find_user_by_username_no_match_returns_none() {
         let dir = tempfile::tempdir().unwrap();
-        write_user(dir.path(), &sample_user("a@example.com")).unwrap();
+        write_user(dir.path(), &sample_user("a")).unwrap();
 
-        assert_eq!(
-            find_user_by_email(dir.path(), "nobody@example.com").unwrap(),
-            None
-        );
+        assert_eq!(find_user_by_username(dir.path(), "nobody").unwrap(), None);
     }
 
     #[test]

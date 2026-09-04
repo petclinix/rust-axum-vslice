@@ -33,7 +33,7 @@ async fn health() -> &'static str {
     "ok"
 }
 
-const SEEDED_ADMIN_EMAIL: &str = "admin@petclinix.local";
+const SEEDED_ADMIN_USERNAME: &str = "admin@petclinix.local";
 const SEEDED_ADMIN_PASSWORD: &str = "admin12345";
 
 /// Admin accounts are seeded, never self-registered (see `docs/architecture.md`'s
@@ -55,7 +55,7 @@ pub fn seed_admin_if_needed(data_dir: &Path) -> std::io::Result<()> {
         .expect("hashing the seeded admin password should never fail");
     let admin = registration::User {
         id: Uuid::new_v4(),
-        email: SEEDED_ADMIN_EMAIL.to_string(),
+        username: SEEDED_ADMIN_USERNAME.to_string(),
         password_hash,
         role: Role::Admin,
         is_active: true,
@@ -63,7 +63,7 @@ pub fn seed_admin_if_needed(data_dir: &Path) -> std::io::Result<()> {
         last_login: None,
     };
     registration::write_user(data_dir, &admin)?;
-    tracing::info!(email = SEEDED_ADMIN_EMAIL, "seeded admin account");
+    tracing::info!(username = SEEDED_ADMIN_USERNAME, "seeded admin account");
     Ok(())
 }
 
@@ -105,6 +105,6 @@ mod tests {
             .filter(|u| u.role == Role::Admin)
             .collect();
         assert_eq!(admins.len(), 1);
-        assert_eq!(admins[0].email, SEEDED_ADMIN_EMAIL);
+        assert_eq!(admins[0].username, SEEDED_ADMIN_USERNAME);
     }
 }

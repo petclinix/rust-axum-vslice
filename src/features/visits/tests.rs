@@ -51,7 +51,7 @@ fn seed() -> Fixture {
         data_dir,
         &registration::User {
             id: owner_user_id,
-            email: format!("{owner_user_id}@example.com"),
+            username: format!("{owner_user_id}@example.com"),
             password_hash: "unused".to_string(),
             role: Role::Owner,
             is_active: true,
@@ -94,7 +94,7 @@ fn seed() -> Fixture {
         data_dir,
         &registration::User {
             id: vet_user_id,
-            email: format!("{vet_user_id}@example.com"),
+            username: format!("{vet_user_id}@example.com"),
             password_hash: "unused".to_string(),
             role: Role::Vet,
             is_active: true,
@@ -284,7 +284,7 @@ async fn record_visit_by_a_non_owning_vet_is_not_found() {
         fixture.data_dir(),
         &registration::User {
             id: other_vet_user_id,
-            email: format!("{other_vet_user_id}@example.com"),
+            username: format!("{other_vet_user_id}@example.com"),
             password_hash: "unused".to_string(),
             role: Role::Vet,
             is_active: true,
@@ -375,7 +375,7 @@ async fn list_for_someone_elses_pet_is_not_found() {
         fixture.data_dir(),
         &registration::User {
             id: other_owner_user_id,
-            email: format!("{other_owner_user_id}@example.com"),
+            username: format!("{other_owner_user_id}@example.com"),
             password_hash: "unused".to_string(),
             role: Role::Owner,
             is_active: true,

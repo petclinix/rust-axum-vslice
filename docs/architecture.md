@@ -89,7 +89,7 @@ data/
   locks/
     vet-<vet_id>.lock                      # appointment writes for that vet (§1)
     availability-<vet_id>.lock              # that vet's own schedule/exceptions
-    users.lock                               # register-time email-uniqueness check + write
+    users.lock                               # register-time username-uniqueness check + write
 ```
 
 - **Filenames are the primary key.** A record's id is its filename; "does X exist" /
@@ -148,20 +148,34 @@ persisted as their own file (§5).
 
 ## Auth Design
 
-- **Register** (`POST /api/auth/register`, public): owner or vet self-registers
-  with email + password (argon2-hashed) + role-specific fields (owner: name/phone;
-  vet: name/specialty). `Admin` is rejected here — see below.
+Reshaped to match `docs/petclinix-openapi-snapshot.json`, the wire contract this
+API is being made compatible with.
+
+- **Register** (`POST /api/users/register`, public): owner or vet self-registers
+  with `username` + password (argon2-hashed) + `type` (`OWNER`/`VET`). `Admin` is
+  rejected here — see below. The target contract carries no profile fields beyond
+  that, so the internal `Owner`/`Vet` profile's `name` defaults to `username` and
+  `phone`/`specialty` stay blank — nothing in the target contract ever reads them
+  back.
 - **Login** (`POST /api/auth/login`, public): verifies the password, issues an
   HS256 JWT (1h expiry, claims `sub`=user id, `role`). No refresh tokens, no
-  sessions on disk.
+  sessions on disk. Response is `{token, type: "Bearer"}`.
+- **`GET /api/users/aboutme`**: returns the caller's own `{id, username, role}`
+  from their verified bearer token.
 - **`AuthUser`** (`auth/extractor.rs`): every protected handler takes this as an
   argument; it verifies the bearer token and yields `{id, role}`. Role checks are
   plain `if auth.role != Role::X` per handler, not a declarative middleware stack.
 - **Admin is seeded, never self-registered** (`lib::seed_admin_if_needed`, called
-  from `main` before the server starts listening): `admin@petclinix.local` /
-  `admin12345` if no admin account exists yet — the same fixed credentials
-  `php-twig-mtier` seeds its admin with, for direct comparison across the
-  PetcliniX implementations.
+  from `main` before the server starts listening): username `admin@petclinix.local`
+  / password `admin12345` if no admin account exists yet — the same fixed
+  credentials `php-twig-mtier` seeds its admin with, for direct comparison across
+  the PetcliniX implementations.
+- **Wire IDs**: every response's `id` is a stable `int64` derived from the
+  internal `Uuid` (`domain::wire_id`), not the `Uuid` itself — the target contract
+  types every id as `integer(int64)`; storage keeps using `Uuid` throughout, and
+  path params resolve the derived id back to it.
+- **Role casing on the wire** is `UPPERCASE` (`OWNER`/`VET`/`ADMIN`), matching the
+  target contract; internal `Role` variants are unchanged.
 
 ## API Surface
 
@@ -170,8 +184,9 @@ human-readable serde encoding (`"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS.f"`).
 
 | Method & Path | Role | Slice |
 |---|---|---|
-| `POST /api/auth/register` | public | registration |
+| `POST /api/users/register` | public | registration |
 | `POST /api/auth/login` | public | registration |
+| `GET /api/users/aboutme` | any authenticated | registration |
 | `GET /api/vets` | owner | vets_directory |
 | `GET /api/pets` | owner | pets |
 | `POST /api/pets` | owner | pets |

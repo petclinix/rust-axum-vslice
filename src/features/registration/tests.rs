@@ -36,68 +36,63 @@ async fn post_json(app: Router, uri: &str, body: Value) -> (StatusCode, Value) {
     (status, json)
 }
 
-fn owner_payload(email: &str) -> Value {
+fn owner_payload(username: &str) -> Value {
     json!({
-        "email": email,
+        "username": username,
         "password": "correct horse",
-        "role": "owner",
-        "name": "Alice",
-        "phone": "555-0100",
+        "type": "OWNER",
     })
 }
 
-fn vet_payload(email: &str) -> Value {
+fn vet_payload(username: &str) -> Value {
     json!({
-        "email": email,
+        "username": username,
         "password": "correct horse",
-        "role": "vet",
-        "name": "Dr. Bob",
-        "specialty": "Surgery",
+        "type": "VET",
     })
 }
 
 #[tokio::test]
-async fn register_owner_returns_201_with_id_email_and_role() {
+async fn register_owner_returns_201_with_id_username_and_role() {
     let (app, _dir) = new_app();
 
-    let (status, body) = post_json(app, "/api/auth/register", owner_payload("a@example.com")).await;
+    let (status, body) = post_json(app, "/api/users/register", owner_payload("alice")).await;
 
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["email"], "a@example.com");
-    assert_eq!(body["role"], "owner");
-    assert!(body["id"].is_string());
+    assert_eq!(body["username"], "alice");
+    assert_eq!(body["role"], "OWNER");
+    assert!(body["id"].is_i64());
 }
 
 #[tokio::test]
 async fn register_vet_returns_201() {
     let (app, _dir) = new_app();
 
-    let (status, body) = post_json(app, "/api/auth/register", vet_payload("vet@example.com")).await;
+    let (status, body) = post_json(app, "/api/users/register", vet_payload("dr-bob")).await;
 
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["role"], "vet");
+    assert_eq!(body["role"], "VET");
 }
 
 #[tokio::test]
-async fn register_duplicate_email_is_rejected_with_conflict() {
+async fn register_duplicate_username_is_rejected_with_conflict() {
     let (app, dir) = new_app();
-    post_json(app, "/api/auth/register", owner_payload("dup@example.com")).await;
+    post_json(app, "/api/users/register", owner_payload("dup")).await;
 
     let app = router().with_state(Config::for_test(dir.path().to_path_buf()));
-    let (status, body) =
-        post_json(app, "/api/auth/register", owner_payload("dup@example.com")).await;
+    let (status, body) = post_json(app, "/api/users/register", owner_payload("dup")).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["code"], "EMAIL_TAKEN");
+    assert_eq!(body["code"], "USERNAME_TAKEN");
 }
 
 #[tokio::test]
-async fn register_email_uniqueness_is_case_insensitive() {
+async fn register_username_uniqueness_is_case_insensitive() {
     let (app, dir) = new_app();
-    post_json(app, "/api/auth/register", owner_payload("Case@Example.com")).await;
+    post_json(app, "/api/users/register", owner_payload("CaseUser")).await;
 
     let app = router().with_state(Config::for_test(dir.path().to_path_buf()));
-    let (status, _) = post_json(app, "/api/auth/register", owner_payload("case@example.com")).await;
+    let (status, _) = post_json(app, "/api/users/register", owner_payload("caseuser")).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
 }
@@ -106,32 +101,20 @@ async fn register_email_uniqueness_is_case_insensitive() {
 async fn register_admin_role_is_rejected() {
     let (app, _dir) = new_app();
 
-    let mut payload = owner_payload("admin@example.com");
-    payload["role"] = json!("admin");
-    let (status, body) = post_json(app, "/api/auth/register", payload).await;
+    let mut payload = owner_payload("wannabe-admin");
+    payload["type"] = json!("ADMIN");
+    let (status, body) = post_json(app, "/api/users/register", payload).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["code"], "VALIDATION_ERROR");
 }
 
 #[tokio::test]
-async fn register_owner_without_phone_is_rejected() {
+async fn register_blank_username_is_rejected() {
     let (app, _dir) = new_app();
 
-    let mut payload = owner_payload("nophone@example.com");
-    payload.as_object_mut().unwrap().remove("phone");
-    let (status, _) = post_json(app, "/api/auth/register", payload).await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn register_vet_without_specialty_is_rejected() {
-    let (app, _dir) = new_app();
-
-    let mut payload = vet_payload("nospecialty@example.com");
-    payload.as_object_mut().unwrap().remove("specialty");
-    let (status, _) = post_json(app, "/api/auth/register", payload).await;
+    let payload = owner_payload("   ");
+    let (status, _) = post_json(app, "/api/users/register", payload).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
@@ -140,9 +123,9 @@ async fn register_vet_without_specialty_is_rejected() {
 async fn register_short_password_is_rejected() {
     let (app, _dir) = new_app();
 
-    let mut payload = owner_payload("shortpw@example.com");
+    let mut payload = owner_payload("shortpw");
     payload["password"] = json!("short");
-    let (status, _) = post_json(app, "/api/auth/register", payload).await;
+    let (status, _) = post_json(app, "/api/users/register", payload).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
@@ -150,40 +133,31 @@ async fn register_short_password_is_rejected() {
 #[tokio::test]
 async fn register_then_login_returns_a_bearer_token() {
     let (app, dir) = new_app();
-    post_json(
-        app,
-        "/api/auth/register",
-        owner_payload("login@example.com"),
-    )
-    .await;
+    post_json(app, "/api/users/register", owner_payload("login-user")).await;
 
     let app = router().with_state(Config::for_test(dir.path().to_path_buf()));
     let (status, body) = post_json(
         app,
         "/api/auth/login",
-        json!({"email": "login@example.com", "password": "correct horse"}),
+        json!({"username": "login-user", "password": "correct horse"}),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(body["token"].as_str().is_some_and(|t| !t.is_empty()));
+    assert_eq!(body["type"], "Bearer");
 }
 
 #[tokio::test]
 async fn login_with_wrong_password_is_unauthorized() {
     let (app, dir) = new_app();
-    post_json(
-        app,
-        "/api/auth/register",
-        owner_payload("wrongpw@example.com"),
-    )
-    .await;
+    post_json(app, "/api/users/register", owner_payload("wrongpw-user")).await;
 
     let app = router().with_state(Config::for_test(dir.path().to_path_buf()));
     let (status, body) = post_json(
         app,
         "/api/auth/login",
-        json!({"email": "wrongpw@example.com", "password": "not the right password"}),
+        json!({"username": "wrongpw-user", "password": "not the right password"}),
     )
     .await;
 
@@ -192,13 +166,13 @@ async fn login_with_wrong_password_is_unauthorized() {
 }
 
 #[tokio::test]
-async fn login_with_unknown_email_is_unauthorized() {
+async fn login_with_unknown_username_is_unauthorized() {
     let (app, _dir) = new_app();
 
     let (status, body) = post_json(
         app,
         "/api/auth/login",
-        json!({"email": "nobody@example.com", "password": "whatever1"}),
+        json!({"username": "nobody", "password": "whatever1"}),
     )
     .await;
 
@@ -211,14 +185,14 @@ async fn login_on_a_deactivated_account_is_forbidden() {
     let (app, dir) = new_app();
     post_json(
         app,
-        "/api/auth/register",
-        owner_payload("deactivated@example.com"),
+        "/api/users/register",
+        owner_payload("deactivated-user"),
     )
     .await;
 
     // No deactivate endpoint exists yet (that's the admin slice) — flip the
     // flag directly on disk, the way that slice will eventually do it.
-    let mut user = model::find_user_by_email(dir.path(), "deactivated@example.com")
+    let mut user = model::find_user_by_username(dir.path(), "deactivated-user")
         .unwrap()
         .unwrap();
     user.is_active = false;
@@ -228,7 +202,7 @@ async fn login_on_a_deactivated_account_is_forbidden() {
     let (status, body) = post_json(
         app,
         "/api/auth/login",
-        json!({"email": "deactivated@example.com", "password": "correct horse"}),
+        json!({"username": "deactivated-user", "password": "correct horse"}),
     )
     .await;
 
@@ -239,14 +213,9 @@ async fn login_on_a_deactivated_account_is_forbidden() {
 #[tokio::test]
 async fn login_updates_last_login() {
     let (app, dir) = new_app();
-    post_json(
-        app,
-        "/api/auth/register",
-        owner_payload("lastlogin@example.com"),
-    )
-    .await;
+    post_json(app, "/api/users/register", owner_payload("lastlogin-user")).await;
 
-    let before = model::find_user_by_email(dir.path(), "lastlogin@example.com")
+    let before = model::find_user_by_username(dir.path(), "lastlogin-user")
         .unwrap()
         .unwrap();
     assert!(before.last_login.is_none());
@@ -255,12 +224,49 @@ async fn login_updates_last_login() {
     post_json(
         app,
         "/api/auth/login",
-        json!({"email": "lastlogin@example.com", "password": "correct horse"}),
+        json!({"username": "lastlogin-user", "password": "correct horse"}),
     )
     .await;
 
-    let after = model::find_user_by_email(dir.path(), "lastlogin@example.com")
+    let after = model::find_user_by_username(dir.path(), "lastlogin-user")
         .unwrap()
         .unwrap();
     assert!(after.last_login.is_some());
+}
+
+#[tokio::test]
+async fn aboutme_returns_the_caller_from_their_bearer_token() {
+    let (app, dir) = new_app();
+    post_json(app, "/api/users/register", owner_payload("aboutme-user")).await;
+
+    let app = router().with_state(Config::for_test(dir.path().to_path_buf()));
+    let (_, login_body) = post_json(
+        app,
+        "/api/auth/login",
+        json!({"username": "aboutme-user", "password": "correct horse"}),
+    )
+    .await;
+    let token = login_body["token"].as_str().unwrap();
+
+    let app = router().with_state(Config::for_test(dir.path().to_path_buf()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/users/aboutme")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["username"], "aboutme-user");
+    assert_eq!(body["role"], "OWNER");
+    assert!(body["id"].is_i64());
 }

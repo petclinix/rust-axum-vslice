@@ -5,17 +5,33 @@
 
 use serde::{Deserialize, Serialize};
 use time::PrimitiveDateTime;
+use uuid::Uuid;
 
 /// A user's role in the system (see `docs/architecture.md`, "Auth Design").
 /// `Owner` and `Vet` self-register;
 /// `Admin` is seeded on first boot and never created through the register
-/// endpoint.
+/// endpoint. Wire-cased `UPPERCASE` to match the target contract in
+/// `docs/petclinix-openapi-snapshot.json` (`ADMIN`/`VET`/`OWNER`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "UPPERCASE")]
 pub enum Role {
     Owner,
     Vet,
     Admin,
+}
+
+/// A stable `int64` derived from a `Uuid`, for the wire only. This repo
+/// keeps `Uuid` as the on-disk storage key everywhere — it's the internal
+/// identity, and path params still resolve back to it — but the target
+/// wire contract (`docs/petclinix-openapi-snapshot.json`) types every `id`
+/// as `integer(int64)`, so responses expose this derived value instead of
+/// the UUID itself. Taking the first 8 bytes rather than hashing keeps this
+/// a pure reinterpretation (no collision-handling logic needed beyond what
+/// a UUID already gives you), and deterministic: the same UUID always maps
+/// to the same wire id, which is what a client polling by id needs.
+pub fn wire_id(id: Uuid) -> i64 {
+    let bytes = id.as_bytes();
+    i64::from_be_bytes(bytes[0..8].try_into().expect("uuid is 16 bytes"))
 }
 
 /// The appointment lifecycle (see `docs/architecture.md`'s API Surface
@@ -85,6 +101,29 @@ impl TimeRange {
 mod tests {
     use super::*;
     use time::macros::datetime;
+
+    mod wire_id {
+        use super::*;
+
+        #[test]
+        fn is_stable_for_the_same_uuid() {
+            let id = Uuid::new_v4();
+            assert_eq!(wire_id(id), wire_id(id));
+        }
+
+        #[test]
+        fn differs_across_a_batch_of_random_uuids() {
+            let ids: Vec<i64> = (0..1000).map(|_| wire_id(Uuid::new_v4())).collect();
+            let mut unique = ids.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(
+                unique.len(),
+                ids.len(),
+                "expected no collisions in 1000 random uuids"
+            );
+        }
+    }
 
     mod appointment_status_transitions {
         use super::*;

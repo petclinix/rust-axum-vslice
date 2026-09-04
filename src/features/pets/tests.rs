@@ -33,7 +33,7 @@ fn seed_user(data_dir: &Path, jwt_secret: &str, role: Role) -> SeededUser {
         data_dir,
         &registration::User {
             id: user_id,
-            email: format!("{user_id}@example.com"),
+            username: format!("{user_id}@example.com"),
             password_hash: "unused".to_string(),
             role,
             is_active: true,

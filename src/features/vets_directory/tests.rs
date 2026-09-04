@@ -58,7 +58,7 @@ async fn list_vets_requires_the_owner_role() {
         dir.path(),
         &registration::User {
             id: vet_user_id,
-            email: "vet@example.com".to_string(),
+            username: "vet@example.com".to_string(),
             password_hash: "unused".to_string(),
             role: Role::Vet,
             is_active: true,
@@ -84,7 +84,7 @@ async fn list_vets_returns_every_vet_with_name_and_specialty() {
         dir.path(),
         &registration::User {
             id: owner_user_id,
-            email: "owner@example.com".to_string(),
+            username: "owner@example.com".to_string(),
             password_hash: "unused".to_string(),
             role: Role::Owner,
             is_active: true,

@@ -14,16 +14,10 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
     let client = server.client();
 
     let vet_token = server
-        .register_and_login(
-            "vet@example.com",
-            json!({"role": "vet", "specialty": "Surgery"}),
-        )
+        .register_and_login("vet@example.com", json!({"type": "VET"}))
         .await;
     let owner_token = server
-        .register_and_login(
-            "owner@example.com",
-            json!({"role": "owner", "phone": "555-0100"}),
-        )
+        .register_and_login("owner@example.com", json!({"type": "OWNER"}))
         .await;
 
     // Vet sets a Monday 9:00-17:00 weekly schedule.
@@ -51,7 +45,10 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
         .unwrap();
     let vets = vets.as_array().unwrap();
     assert_eq!(vets.len(), 1);
-    assert_eq!(vets[0]["specialty"], "Surgery");
+    // Registration no longer collects a specialty/name (the target wire
+    // contract's `RegisterRequest` only carries `username`/`password`/
+    // `type`), so the vet's directory `name` now defaults to `username`.
+    assert_eq!(vets[0]["name"], "vet@example.com");
     let vet_id = vets[0]["id"].as_str().unwrap();
 
     // Owner adds a pet.

@@ -10,10 +10,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("email already registered")]
-    EmailTaken,
+    #[error("username already registered")]
+    UsernameTaken,
 
-    #[error("invalid email or password")]
+    #[error("invalid username or password")]
     InvalidCredentials,
 
     #[error("account is deactivated")]
@@ -59,7 +59,7 @@ struct ErrorBody {
 impl AppError {
     fn code(&self) -> &'static str {
         match self {
-            AppError::EmailTaken => "EMAIL_TAKEN",
+            AppError::UsernameTaken => "USERNAME_TAKEN",
             AppError::InvalidCredentials => "INVALID_CREDENTIALS",
             AppError::AccountDeactivated => "ACCOUNT_DEACTIVATED",
             AppError::Unauthenticated => "UNAUTHENTICATED",
@@ -77,7 +77,7 @@ impl AppError {
 
     fn status(&self) -> StatusCode {
         match self {
-            AppError::EmailTaken => StatusCode::CONFLICT,
+            AppError::UsernameTaken => StatusCode::CONFLICT,
             AppError::InvalidCredentials => StatusCode::UNAUTHORIZED,
             AppError::AccountDeactivated => StatusCode::FORBIDDEN,
             AppError::Unauthenticated => StatusCode::UNAUTHORIZED,

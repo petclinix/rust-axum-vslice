@@ -20,7 +20,7 @@ use super::activity;
 #[derive(Debug, Serialize)]
 pub struct UserResponse {
     pub id: Uuid,
-    pub email: String,
+    pub username: String,
     pub role: Role,
     pub is_active: bool,
     #[serde(with = "time::serde::rfc3339")]
@@ -33,7 +33,7 @@ impl From<registration::User> for UserResponse {
     fn from(u: registration::User) -> Self {
         Self {
             id: u.id,
-            email: u.email,
+            username: u.username,
             role: u.role,
             is_active: u.is_active,
             created_at: u.created_at,
