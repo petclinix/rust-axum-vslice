@@ -1,6 +1,6 @@
 //! Decode/validate the inline base64 `picture`/`pictureContentType` fields,
 //! store the decoded bytes outside `pets/<id>.json`, and re-encode them for
-//! the read path (PLAN.md §9). The wire contract deliberately mirrors
+//! the read path (`docs/architecture-internals.md` §6). The wire contract deliberately mirrors
 //! `java-springboot-react-mtier`'s `PetRequest`/`Pet`; the on-disk layout
 //! does not — the bytes live under `uploads/pets/<id>/`, never inlined in
 //! the pet record itself.

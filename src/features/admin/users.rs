@@ -1,4 +1,4 @@
-//! List/deactivate any user (PLAN.md §6).
+//! List/deactivate any user.
 
 use std::path::Path;
 

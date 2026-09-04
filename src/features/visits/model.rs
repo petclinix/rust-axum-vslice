@@ -1,4 +1,4 @@
-//! Visit records and their file I/O (PLAN.md §4). Filename *is* the
+//! Visit records and their file I/O. Filename *is* the
 //! appointment id — "0..1 per appointment" is enforced by the on-disk
 //! layout itself, not by a separate uniqueness check across a directory.
 
@@ -50,7 +50,7 @@ pub fn find_by_appointment_id(data_dir: &Path, appointment_id: Uuid) -> io::Resu
 /// Cross-slice helper: given a set of appointment ids (typically "every
 /// appointment for one pet"), returns whichever of them have a recorded
 /// visit. Used by both this slice's own `GET /api/pets/{id}/visits` and the
-/// `pets` slice's `GET /api/pets/{id}` detail view (PLAN.md §9).
+/// `pets` slice's `GET /api/pets/{id}` detail view (`docs/architecture-internals.md` §6).
 pub fn find_all_for_appointments(
     data_dir: &Path,
     appointment_ids: &[Uuid],

@@ -1,8 +1,8 @@
-//! Vet-lock acquire helper specific to this slice (PLAN.md §6). Every
+//! Vet-lock acquire helper specific to this slice. Every
 //! write path — book/cancel/reschedule/confirm/complete/no-show — goes
 //! through `acquire`, even the transitions that don't need the overlap
 //! check, so state-machine races (e.g. confirm racing cancel) are excluded
-//! too (PLAN.md §5).
+//! too (`docs/architecture-internals.md` §1).
 
 use std::io;
 use std::path::Path;

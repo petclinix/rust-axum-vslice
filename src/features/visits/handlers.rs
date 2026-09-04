@@ -88,7 +88,7 @@ pub async fn record_visit(
     Ok((StatusCode::CREATED, Json(visit.into())))
 }
 
-/// No lock here (PLAN.md §3, "Non-critical writes"): a completed
+/// No lock here (see `docs/architecture.md`'s Design Constraints): a completed
 /// appointment is recorded by exactly the one vet who just completed it,
 /// with no realistic concurrent contention the way booking has — a plain
 /// read-check-then-write is enough, same reasoning as `login`'s

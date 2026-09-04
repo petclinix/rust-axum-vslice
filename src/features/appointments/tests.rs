@@ -565,7 +565,7 @@ async fn get_slots_returns_the_free_windows_around_a_booking() {
     assert_eq!(windows[1]["end"], "2026-09-07 17:00:00.0");
 }
 
-/// The concurrency stress test (PLAN.md §5/§10) — this repo's proof of
+/// The concurrency stress test (`docs/architecture-internals.md` §§1/4) — this repo's proof of
 /// correctness. Many concurrent booking attempts for the same overlapping
 /// slot, for the same vet, against one shared data dir: exactly one must
 /// succeed and the rest must see `SlotUnavailable`, and the on-disk active

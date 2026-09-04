@@ -9,8 +9,9 @@ use crate::error::AppError;
 
 use super::token;
 
-/// The authenticated caller, extracted from a verified bearer JWT (PLAN.md
-/// §7). Every protected handler takes this as an argument; role checks are
+/// The authenticated caller, extracted from a verified bearer JWT (see
+/// `docs/architecture.md`'s Auth Design section). Every protected handler
+/// takes this as an argument; role checks are
 /// plain `if auth.role != ...` per handler, not a declarative middleware
 /// stack.
 pub struct AuthUser {

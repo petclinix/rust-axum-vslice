@@ -105,7 +105,7 @@ fn appointment_not_found() -> AppError {
     AppError::NotFound("appointment not found".to_string())
 }
 
-/// Best-effort (PLAN.md §6): a logging failure shouldn't fail an
+/// Best-effort: a logging failure shouldn't fail an
 /// appointment mutation that already succeeded.
 fn log_activity(data_dir: &Path, event_type: &str, details: serde_json::Value) {
     if let Err(e) = activity::record(data_dir, event_type, details) {
@@ -159,7 +159,7 @@ pub async fn get_slots(
 
 /// Read path: a shared lock is enough — it guards against observing this
 /// vet's directory mid-way through a concurrent write, which the write
-/// path's atomic rename doesn't cover for a *multi-file* view (PLAN.md §5).
+/// path's atomic rename doesn't cover for a *multi-file* view (`docs/architecture-internals.md` §1).
 fn get_slots_blocking(
     data_dir: &Path,
     vet_id: Uuid,
@@ -200,7 +200,7 @@ pub async fn book(
     Ok((StatusCode::CREATED, Json(appointment.into())))
 }
 
-/// The critical-section write path (PLAN.md §5): read-check-then-write, all
+/// The critical-section write path (`docs/architecture-internals.md` §1): read-check-then-write, all
 /// under one exclusive vet lock.
 fn book_blocking(
     data_dir: &Path,
@@ -332,7 +332,7 @@ fn cancel_blocking(
     Ok(appointment)
 }
 
-/// This repo doesn't model per-location timezones (PLAN.md scope) — "now"
+/// This repo doesn't model per-location timezones — "now"
 /// is treated as naive UTC, matched directly against the naive `time_slot`
 /// appointments are stored with.
 fn now_naive() -> PrimitiveDateTime {
@@ -372,7 +372,7 @@ pub async fn reschedule(
     Ok(Json(appointment.into()))
 }
 
-/// Cancel-old + book-new inside one lock acquisition (PLAN.md §5) — not two
+/// Cancel-old + book-new inside one lock acquisition (`docs/architecture-internals.md` §3) — not two
 /// separate critical sections, so nothing else can slot into the old
 /// appointment's freed time between the two writes.
 fn reschedule_blocking(

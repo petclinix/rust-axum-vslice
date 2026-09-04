@@ -1,4 +1,4 @@
-//! Black-box vet journey (PLAN.md §10): set availability → see a booking
+//! Black-box vet journey (`docs/architecture-internals.md` §9): set availability → see a booking
 //! land on the calendar → confirm → complete → record a visit → duplicate
 //! visit rejected → the visit shows up for the owner too.
 
@@ -141,7 +141,7 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
     assert_eq!(duplicate_visit.status(), 409);
 
     // The owner sees it both via the dedicated endpoint and embedded in the
-    // pet detail view (PLAN.md §9).
+    // pet detail view (`docs/architecture-internals.md` §6).
     let owner_visits: serde_json::Value = client
         .get(server.url(&format!("/api/pets/{pet_id}/visits")))
         .bearer_auth(&owner_token)

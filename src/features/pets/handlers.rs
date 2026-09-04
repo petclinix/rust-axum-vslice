@@ -26,7 +26,7 @@ pub struct PetRequest {
     pub breed: String,
     pub birth_date: Date,
     /// Base64, no `data:` prefix — matches `java-springboot-react-mtier`'s
-    /// wire contract (PLAN.md §9).
+    /// wire contract (`docs/architecture-internals.md` §6).
     pub picture: String,
     #[serde(rename = "pictureContentType")]
     pub picture_content_type: String,
@@ -45,7 +45,8 @@ pub struct PetResponse {
     pub picture_content_type: String,
 }
 
-/// `GET /api/pets/{id}` specifically includes visit history (PLAN.md §9);
+/// `GET /api/pets/{id}` specifically includes visit history (see
+/// `docs/architecture.md`'s API Surface section);
 /// list/add/update don't, so this stays a separate shape from
 /// `PetResponse` rather than an always-present-but-usually-empty field.
 #[derive(Debug, Serialize)]
@@ -177,9 +178,9 @@ pub async fn get_pet(
     Ok(Json(response))
 }
 
-/// Visit history (PLAN.md §9): every completed appointment for this pet
+/// Visit history: every completed appointment for this pet
 /// that has a recorded visit — a cross-slice read into both `appointments`
-/// and `visits` (PLAN.md §6 constraint 5).
+/// and `visits` (`docs/architecture.md` Design Constraint 5).
 fn get_pet_blocking(
     data_dir: &Path,
     user_id: Uuid,

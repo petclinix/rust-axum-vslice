@@ -1,5 +1,5 @@
-//! Weekly availability slots + one-off exceptions, and their file I/O
-//! (PLAN.md §4). Partitioned by `vet_id`, same as appointments/locks — a
+//! Weekly availability slots + one-off exceptions, and their file I/O.
+//! Partitioned by `vet_id`, same as appointments/locks — a
 //! read or write for one vet never touches another vet's directory.
 
 use std::io;
@@ -81,7 +81,7 @@ fn exception_path(data_dir: &Path, vet_id: Uuid, id: Uuid) -> PathBuf {
 }
 
 /// The registration slice's `users.lock` counterpart for this slice: a vet
-/// editing their own weekly schedule or exceptions (PLAN.md §3).
+/// editing their own weekly schedule or exceptions.
 pub fn lock_path(data_dir: &Path, vet_id: Uuid) -> PathBuf {
     data_dir
         .join("locks")
@@ -93,7 +93,7 @@ pub fn write_slot(data_dir: &Path, slot: &AvailabilitySlot) -> io::Result<()> {
 }
 
 /// Cross-slice read: `appointments` calls this to derive free slots
-/// (PLAN.md §6 constraint 5).
+/// (`docs/architecture.md` Design Constraint 5).
 pub fn read_weekly(data_dir: &Path, vet_id: Uuid) -> io::Result<Vec<AvailabilitySlot>> {
     storage::list_dir_json(&availability_dir(data_dir, vet_id))
 }
@@ -102,7 +102,7 @@ pub fn read_weekly(data_dir: &Path, vet_id: Uuid) -> io::Result<Vec<Availability
 /// file for `vet_id` first. Must be called holding the vet's exclusive
 /// availability lock, same as the write that follows it, so a concurrent
 /// reader never observes the directory between "old slots gone" and "new
-/// slots written" (PLAN.md §5).
+/// slots written" (`docs/architecture-internals.md` §1).
 pub fn delete_all_slots(data_dir: &Path, vet_id: Uuid) -> io::Result<()> {
     match std::fs::remove_dir_all(availability_dir(data_dir, vet_id)) {
         Ok(()) => Ok(()),
@@ -119,7 +119,7 @@ pub fn write_exception(data_dir: &Path, exception: &AvailabilityException) -> io
 }
 
 /// Cross-slice read: `appointments` calls this to derive free slots for one
-/// day (PLAN.md §6 constraint 5).
+/// day (`docs/architecture.md` Design Constraint 5).
 pub fn read_exceptions(data_dir: &Path, vet_id: Uuid) -> io::Result<Vec<AvailabilityException>> {
     storage::list_dir_json(&exceptions_dir(data_dir, vet_id))
 }

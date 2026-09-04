@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-/// Env-based app configuration. See PLAN.md §2/§6 — no config-management
-/// framework, plain `std::env` reads at this scale. Doubles as the axum
+/// Env-based app configuration — no config-management framework, plain
+/// `std::env` reads at this scale. Doubles as the axum
 /// `State` shared with every handler that needs `data_dir` or `jwt_secret`.
 #[derive(Clone)]
 pub struct Config {
@@ -9,7 +9,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub jwt_secret: String,
     /// How far in advance an appointment must sit before it can be
-    /// cancelled (PLAN.md §8, "cutoff-gated").
+    /// cancelled ("cutoff-gated" in `docs/architecture.md`'s API table).
     pub cancellation_cutoff_hours: i64,
     /// Used when a booking request omits `duration_minutes`.
     pub appointment_default_duration_min: i64,
@@ -56,7 +56,7 @@ impl Config {
 impl Config {
     /// A `Config` pointed at `data_dir` (typically a fresh
     /// `tempfile::tempdir()`), for slice tests that need to build a router
-    /// via `.with_state(...)` (PLAN.md §10).
+    /// via `.with_state(...)` (`docs/architecture.md`'s Testing section).
     pub fn for_test(data_dir: PathBuf) -> Self {
         Self {
             port: 0,

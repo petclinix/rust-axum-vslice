@@ -1,4 +1,4 @@
-//! Typed error → HTTP mapping (PLAN.md §6). Handlers return
+//! Typed error → HTTP mapping. Handlers return
 //! `Result<_, AppError>` and use `?`; this is the one place that decides the
 //! JSON body and status code for every failure mode.
 

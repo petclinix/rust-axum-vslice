@@ -1,4 +1,4 @@
-//! `derive_free_slots` — pure function, no I/O (PLAN.md §6). Free time for
+//! `derive_free_slots` — pure function, no I/O. Free time for
 //! one vet on one date = weekly availability (or that date's exception, if
 //! any) minus the time already occupied by active appointments.
 
@@ -11,7 +11,8 @@ use super::model::Appointment;
 
 /// The free `[start, end)` windows for `date`, after subtracting active
 /// appointments. `exception` must already be resolved to the single
-/// exception (if any) for `date` — at most one can exist per PLAN.md §4.
+/// exception (if any) for `date` — at most one can exist per the on-disk
+/// layout (`docs/architecture.md`).
 pub fn derive_free_slots(
     date: Date,
     weekly: &[AvailabilitySlot],
@@ -207,7 +208,8 @@ mod tests {
     #[test]
     fn appointment_touching_the_exact_end_leaves_the_whole_window_free() {
         // Ends exactly when the window ends — half-open, so it doesn't
-        // carve anything off (PLAN.md §10 "exact-boundary slots").
+        // carve anything off ("exact-boundary slots" — see `TimeRange::overlaps`
+        // and `docs/architecture-internals.md` §5).
         let weekly = [weekly_slot(DayOfWeek::Monday, "9:00", "12:00")];
         let appointments = [booked(datetime!(2026-09-07 12:00), 30)];
 

@@ -1,4 +1,4 @@
-//! Black-box owner journey (PLAN.md §10): register → discover a vet → add a
+//! Black-box owner journey (`docs/architecture-internals.md` §9): register → discover a vet → add a
 //! pet → check free slots → book → list "mine" → view pet detail → cancel.
 //! Driven entirely over real HTTP against a spawned instance, mirroring
 //! what a Playwright E2E suite would exercise through a UI.

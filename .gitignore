@@ -1,7 +1,7 @@
 ## Cargo
 /target/
 
-## App data (files-instead-of-a-database — see PLAN.md §4)
+## App data (files-instead-of-a-database — see docs/architecture.md)
 /data/
 .env
 

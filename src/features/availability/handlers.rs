@@ -136,7 +136,7 @@ pub async fn set_weekly(
 /// Deletes then rewrites the whole weekly schedule under one lock
 /// acquisition, so a concurrent reader (e.g. `appointments` deriving free
 /// slots) never observes the directory between "old slots gone" and "new
-/// slots written" (PLAN.md §5).
+/// slots written" (`docs/architecture-internals.md` §1).
 fn set_weekly_blocking(
     data_dir: &Path,
     user_id: Uuid,

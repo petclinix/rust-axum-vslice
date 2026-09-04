@@ -1,5 +1,5 @@
 //! A vet records diagnosis/vaccination/notes on a completed appointment;
-//! the owner reads visit history for their pets (PLAN.md §6).
+//! the owner reads visit history for their pets.
 
 mod handlers;
 pub mod model;

@@ -1,11 +1,13 @@
-//! Types shared by more than one vertical slice (PLAN.md §6). Nothing here
+//! Types shared by more than one vertical slice (see `docs/architecture.md`,
+//! "Module Layout"). Nothing here
 //! does file I/O — these are pure types and pure functions only; anything
 //! that needs `storage` belongs in a slice's own `model.rs`, not here.
 
 use serde::{Deserialize, Serialize};
 use time::PrimitiveDateTime;
 
-/// A user's role in the system (PLAN.md §7). `Owner` and `Vet` self-register;
+/// A user's role in the system (see `docs/architecture.md`, "Auth Design").
+/// `Owner` and `Vet` self-register;
 /// `Admin` is seeded on first boot and never created through the register
 /// endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +18,8 @@ pub enum Role {
     Admin,
 }
 
-/// The appointment lifecycle (PLAN.md §8): `Booked → Confirmed →
+/// The appointment lifecycle (see `docs/architecture.md`'s API Surface
+/// section): `Booked → Confirmed →
 /// Completed/Cancelled/NoShow`. `Cancelled` is reachable from both `Booked`
 /// and `Confirmed` (cancellation is cutoff-gated, not confirm-gated).
 /// `Completed`, `Cancelled`, and `NoShow` are terminal — nothing transitions
@@ -34,7 +37,7 @@ pub enum AppointmentStatus {
 impl AppointmentStatus {
     /// Whether the state machine allows moving from `self` to `next`. A
     /// handler must reject any transition this returns `false` for with a
-    /// typed `AppError::InvalidTransition`, not a generic 400 (PLAN.md §8).
+    /// typed `AppError::InvalidTransition`, not a generic 400.
     pub fn can_transition_to(self, next: AppointmentStatus) -> bool {
         use AppointmentStatus::*;
 
@@ -51,7 +54,7 @@ impl AppointmentStatus {
 
 /// A half-open `[start, end)` time interval — the shared representation for
 /// an appointment slot, an availability window, and everything
-/// `derive_free_slots` computes over (PLAN.md §5/§6).
+/// `derive_free_slots` computes over (`docs/architecture-internals.md` §1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeRange {
     pub start: PrimitiveDateTime,

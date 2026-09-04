@@ -1,6 +1,6 @@
-//! Appointment records and their file I/O (PLAN.md §4). Partitioned by
+//! Appointment records and their file I/O. Partitioned by
 //! `vet_id`, exactly like `availability` — a booking attempt only ever
-//! locks and scans one vet's directory (PLAN.md §5).
+//! locks and scans one vet's directory (`docs/architecture-internals.md` §1).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -24,8 +24,8 @@ pub struct Appointment {
 
 impl Appointment {
     /// `Booked`/`Confirmed` occupy time on the calendar and block new
-    /// bookings; `Completed`/`Cancelled`/`NoShow` don't (PLAN.md §5
-    /// pseudocode's `read_active_for_vet`).
+    /// bookings; `Completed`/`Cancelled`/`NoShow` don't
+    /// (`docs/architecture-internals.md` §1).
     pub fn is_active(&self) -> bool {
         matches!(
             self.status,
@@ -53,7 +53,7 @@ fn appointment_path(data_dir: &Path, vet_id: Uuid, id: Uuid) -> PathBuf {
     appointments_dir(data_dir, vet_id).join(format!("{id}.json"))
 }
 
-/// The headline lock (PLAN.md §5): every write path (book, cancel,
+/// The headline lock (`docs/architecture-internals.md` §1): every write path (book, cancel,
 /// reschedule, confirm, complete, no-show) takes this exclusively before
 /// touching `vet_id`'s appointments.
 pub fn lock_path(data_dir: &Path, vet_id: Uuid) -> PathBuf {
@@ -91,7 +91,7 @@ pub fn read_active_for_vet(data_dir: &Path, vet_id: Uuid) -> io::Result<Vec<Appo
 /// not the vet id — an owner may have booked with any vet. This checks one
 /// filename per vet directory rather than parsing every appointment, so
 /// it's a targeted existence check, not the kind of whole-`data/` scan
-/// PLAN.md §4 warns against; the on-disk layout has no secondary index from
+/// `docs/architecture.md`'s data-layout section warns against; the on-disk layout has no secondary index from
 /// appointment id to vet id, so a bounded scan across vet directories is
 /// the only way to resolve one without it. `vet_id` never changes for an
 /// appointment once created, so this is safe to do before taking any lock.
@@ -124,7 +124,7 @@ pub fn find_vet_id_for_appointment(
 /// Every appointment across every vet — used only by the owner-scoped "my
 /// appointments" listing, which has no single vet to scope to (an owner's
 /// pets may have appointments with several vets). Same rationale as admin
-/// stats in PLAN.md §4: a global scan is unavoidable when the query itself
+/// stats (`docs/architecture.md`'s data-layout section): a global scan is unavoidable when the query itself
 /// is global, not vet-scoped.
 pub fn read_all(data_dir: &Path) -> io::Result<Vec<Appointment>> {
     let root = appointments_root(data_dir);

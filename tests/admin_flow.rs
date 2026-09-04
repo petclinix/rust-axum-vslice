@@ -1,5 +1,6 @@
-//! Black-box admin journey (PLAN.md §10): the seeded admin account logs in
-//! (no self-registration path exists for it — PLAN.md §7), lists users,
+//! Black-box admin journey (`docs/architecture-internals.md` §9): the seeded admin account logs in
+//! (no self-registration path exists for it — see `docs/architecture.md`'s
+//! Auth Design section), lists users,
 //! reads stats and the activity log other slices wrote to, then deactivates
 //! a user and confirms it can no longer log in.
 

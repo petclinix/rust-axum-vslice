@@ -1,4 +1,4 @@
-//! The core slice (PLAN.md §5/§6): booking, the state machine, and the
+//! The core slice: booking, the state machine, and the
 //! `flock`-based concurrency this whole repo exists to demonstrate.
 
 mod handlers;

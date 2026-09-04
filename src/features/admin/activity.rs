@@ -1,7 +1,7 @@
-//! Append-only activity log (PLAN.md §4/§6). `record` is the one function
+//! Append-only activity log. `record` is the one function
 //! other slices call into — login, booking created/cancelled/etc. — "a
 //! thin, one-directional dependency on a logging utility... not a shared
-//! business-logic layer" (PLAN.md §6).
+//! business-logic layer" (see `docs/architecture.md`'s Slice Responsibilities).
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -44,11 +44,11 @@ fn log_path(data_dir: &Path, date: Date) -> PathBuf {
 }
 
 /// Appends one line to today's NDJSON file. No lock: each `write()` under
-/// `O_APPEND` is atomic at the OS level for a line this size, and per
-/// PLAN.md §6 this is deliberately a thin logging utility, not a
-/// correctness-critical write path the way booking is (PLAN.md §5) — the
+/// `O_APPEND` is atomic at the OS level for a line this size, and this is
+/// deliberately a thin logging utility, not a correctness-critical write
+/// path the way booking is (`docs/architecture-internals.md` §1) — the
 /// same "no invariant to protect" trade-off as other non-critical writes
-/// (PLAN.md §3).
+/// (see `docs/architecture.md`'s Design Constraints).
 pub fn record(data_dir: &Path, event_type: &str, details: serde_json::Value) -> io::Result<()> {
     let event = ActivityEvent {
         timestamp: OffsetDateTime::now_utc(),

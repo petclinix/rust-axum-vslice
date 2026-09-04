@@ -36,7 +36,8 @@ async fn health() -> &'static str {
 const SEEDED_ADMIN_EMAIL: &str = "admin@petclinix.local";
 const SEEDED_ADMIN_PASSWORD: &str = "admin12345";
 
-/// Admin accounts are seeded, never self-registered (PLAN.md §7/§11) — same
+/// Admin accounts are seeded, never self-registered (see `docs/architecture.md`'s
+/// Auth Design section) — same
 /// fixed credentials `php-twig-mtier` seeds its admin with, for easy
 /// side-by-side comparison across the PetcliniX implementations. Exposed
 /// from the library (not just called inline in `main`) so black-box tests

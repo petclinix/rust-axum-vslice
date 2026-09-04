@@ -1,4 +1,4 @@
-//! Shared black-box test harness (PLAN.md §10): spawns a real instance of
+//! Shared black-box test harness (`docs/architecture-internals.md` §9): spawns a real instance of
 //! the app — a real `TcpListener` on a random port, served by real
 //! `axum::serve` — against a fresh temp data dir, and drives it purely
 //! through HTTP via `reqwest`, the same way a real client would. This is

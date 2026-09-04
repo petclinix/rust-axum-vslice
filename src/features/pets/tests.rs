@@ -20,8 +20,8 @@ use super::router;
 
 /// A user + (for owners) an Owner record seeded directly through
 /// `registration::model` — pets tests shouldn't depend on the registration
-/// slice's HTTP layer, only on the cross-slice lookup it exposes (PLAN.md §6
-/// constraint 5) — plus a JWT for that user.
+/// slice's HTTP layer, only on the cross-slice lookup it exposes
+/// (`docs/architecture.md` Design Constraint 5) — plus a JWT for that user.
 struct SeededUser {
     token: String,
 }

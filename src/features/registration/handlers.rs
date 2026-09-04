@@ -98,9 +98,9 @@ pub async fn register(
 }
 
 /// Runs inside `spawn_blocking`: takes the exclusive `users.lock` and does
-/// the read-check-then-write critical section synchronously (PLAN.md §3/§5
-/// — file locks are blocking OS calls, so this must not run on an async
-/// task directly, the same way any other blocking I/O shouldn't).
+/// the read-check-then-write critical section synchronously — file locks
+/// are blocking OS calls, so this must not run on an async task directly,
+/// the same way any other blocking I/O shouldn't (`docs/architecture-internals.md` §2).
 fn register_locked(data_dir: &Path, req: RegisterRequest) -> Result<RegisterResponse, AppError> {
     let _lock = storage::FileLock::exclusive(&model::users_lock_path(data_dir))?;
 
@@ -144,8 +144,8 @@ fn register_locked(data_dir: &Path, req: RegisterRequest) -> Result<RegisterResp
     }
 
     // Best-effort: a logging failure shouldn't fail a registration that
-    // already succeeded (PLAN.md §6 — activity is a thin side utility, not
-    // part of the transaction it observes).
+    // already succeeded — activity is a thin side utility, not part of the
+    // transaction it observes.
     if let Err(e) = activity::record(
         data_dir,
         "user_registered",
@@ -179,7 +179,7 @@ pub async fn login(
 /// Same blocking-task rationale as `register_locked`. Only the lookup is
 /// taken under a lock (shared — a read); the `last_login` write afterward is
 /// a plain single-record update with no invariant to protect, so it doesn't
-/// need one (PLAN.md §5, "Non-critical writes").
+/// need one (see `docs/architecture.md`'s Design Constraints).
 fn login_locked(data_dir: &Path, req: LoginRequest) -> Result<model::User, AppError> {
     let found = {
         let _lock = storage::FileLock::shared(&model::users_lock_path(data_dir))?;

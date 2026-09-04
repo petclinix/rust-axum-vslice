@@ -14,8 +14,9 @@ services:
       - petclinixnet
 
   # Optional: java-springboot-react-mtier's React frontend, pointed at this
-  # backend to exercise the pet-picture wire-contract compatibility called
-  # out in PLAN.md §9. Not started by a plain `docker compose up` — only
+  # backend to exercise the pet-picture wire-contract compatibility described
+  # in docs/architecture-internals.md §6. Not started by a plain `docker
+  # compose up` — only
   # with `docker compose --profile frontend up --build`. The frontend image
   # calls relative `/api/...` paths (no configurable API base URL), so it
   # needs the `ingress` reverse proxy below in front of it rather than being

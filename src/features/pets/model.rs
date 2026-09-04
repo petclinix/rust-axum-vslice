@@ -1,4 +1,4 @@
-//! Pet records and their file I/O (PLAN.md §4). Picture bytes are
+//! Pet records and their file I/O. Picture bytes are
 //! deliberately *not* part of this struct — see `uploads.rs`.
 
 use std::io;

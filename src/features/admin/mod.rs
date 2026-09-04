@@ -1,5 +1,5 @@
 //! List/deactivate any user, read the activity log, view stats — all
-//! admin-only (PLAN.md §6). `activity` is `pub` so other slices can call
+//! admin-only. `activity` is `pub` so other slices can call
 //! `admin::activity::record(...)`; `users`/`stats` stay private, reached
 //! only through this module's `router()`.
 

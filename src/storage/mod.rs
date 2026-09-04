@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Writes `value` as pretty JSON to `path` via write-tmp + `fsync` + `rename`,
-/// so a crash mid-write never leaves a half-written record (PLAN.md §4). The
+/// so a crash mid-write never leaves a half-written record. The
 /// tmp filename is unique per call so concurrent unlocked writers to the same
 /// path never share (and corrupt) a tmp file — whichever rename lands last
 /// wins, which is the accepted semantics for writes with no invariant to
-/// protect (PLAN.md §5, "Non-critical writes").
+/// protect (see `docs/architecture.md`'s Design Constraints).
 pub fn atomic_write<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -68,8 +68,9 @@ pub fn list_dir_json<T: DeserializeOwned>(dir: &Path) -> io::Result<Vec<T>> {
 }
 
 /// RAII guard for an OS-level advisory lock (`flock`) taken on a dedicated
-/// lock file — PLAN.md §5's substitute for a database's row locks /
-/// transactions. Dropping the guard closes the file, which releases the
+/// lock file — this repo's substitute for a database's row locks /
+/// transactions (`docs/architecture-internals.md` §1). Dropping the guard
+/// closes the file, which releases the
 /// lock; there is no explicit unlock step.
 pub struct FileLock {
     _file: File,
@@ -77,7 +78,7 @@ pub struct FileLock {
 
 impl FileLock {
     /// Blocks until an exclusive lock on `path` is acquired. Use for any
-    /// read-check-then-write critical section (PLAN.md §5).
+    /// read-check-then-write critical section (`docs/architecture-internals.md` §1).
     pub fn exclusive(path: &Path) -> io::Result<Self> {
         let file = open_lock_file(path)?;
         file.lock()?;

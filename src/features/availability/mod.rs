@@ -1,8 +1,9 @@
-//! A vet sets their recurring weekly schedule and one-off exceptions
-//! (PLAN.md §6). Both endpoints are vet-scoped writes on that vet's own
-//! `availability-<vet_id>.lock` (PLAN.md §3) — no read endpoint here; the
+//! A vet sets their recurring weekly schedule and one-off exceptions.
+//! Both endpoints are vet-scoped writes on that vet's own
+//! `availability-<vet_id>.lock` — no read endpoint here; the
 //! `appointments` slice reads this data directly via `model::read_weekly`/
-//! `read_exceptions` (PLAN.md §6 constraint 5) when it derives free slots.
+//! `read_exceptions` (`docs/architecture.md` Design Constraint 5) when it
+//! derives free slots.
 
 mod handlers;
 pub mod model;

@@ -13,7 +13,7 @@ RUN cargo build --release
 # ---------------------------------------------------------------------------
 # runtime: just the compiled binary + CA certs, no toolchain. Last stage, so
 # it's the default `docker build` target — one statically-ish linked binary,
-# no JVM/interpreter, no second container for a DB (see PLAN.md §11).
+# no JVM/interpreter, no second container for a DB.
 # ---------------------------------------------------------------------------
 FROM debian:trixie-slim AS runtime
 

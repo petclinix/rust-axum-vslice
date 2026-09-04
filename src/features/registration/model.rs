@@ -1,4 +1,5 @@
-//! User/Owner/Vet records and their file I/O (PLAN.md §4). No cross-entity
+//! User/Owner/Vet records and their file I/O (see `docs/architecture.md`'s
+//! On-Disk Data Layout section). No cross-entity
 //! abstraction — each function here talks to exactly one directory under
 //! `data/`.
 
@@ -66,7 +67,7 @@ fn vet_path(data_dir: &Path, id: Uuid) -> PathBuf {
 }
 
 /// The registration slice's own lock: register-time email-uniqueness check +
-/// write (PLAN.md §3, "Non-critical writes").
+/// write (see `docs/architecture.md`'s Design Constraints).
 pub fn users_lock_path(data_dir: &Path) -> PathBuf {
     data_dir.join("locks").join("users.lock")
 }
@@ -100,8 +101,9 @@ pub fn write_owner(data_dir: &Path, owner: &Owner) -> io::Result<()> {
 
 /// Cross-slice lookup: other slices (e.g. `pets`) key their records by
 /// `owner_id`, not `user_id`, so this resolves "which owner is the
-/// authenticated user" (PLAN.md §6 constraint 5 — a slice calls another
-/// slice's public functions directly, not through a shared repository).
+/// authenticated user" (`docs/architecture.md` Design Constraint 5 — a slice
+/// calls another slice's public functions directly, not through a shared
+/// repository).
 pub fn find_owner_by_user_id(data_dir: &Path, user_id: Uuid) -> io::Result<Option<Owner>> {
     let owners: Vec<Owner> = storage::list_dir_json(&owners_dir(data_dir))?;
     Ok(owners.into_iter().find(|o| o.user_id == user_id))

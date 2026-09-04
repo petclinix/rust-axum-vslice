@@ -1,5 +1,5 @@
 //! Register + login, for both owner and vet roles — one slice, since it's
-//! one end-user journey (PLAN.md §6). Admin is seeded, never registered here.
+//! one end-user journey. Admin is seeded, never registered here.
 
 mod handlers;
 pub mod model;

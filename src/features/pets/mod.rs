@@ -1,4 +1,4 @@
-//! Add/list/get/update a pet, owner-scoped (PLAN.md §6). Simplest CRUD
+//! Add/list/get/update a pet, owner-scoped. Simplest CRUD
 //! slice — proves the vertical-slice pattern end-to-end, including the
 //! first protected route.
 

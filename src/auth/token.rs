@@ -15,8 +15,8 @@ pub struct Claims {
     pub exp: i64,
 }
 
-/// Issues an HS256 JWT for `user_id`/`role`, 1h expiry (PLAN.md §7 — matches
-/// the java implementation's expiry for side-by-side comparability).
+/// Issues an HS256 JWT for `user_id`/`role`, 1h expiry — matches
+/// the java implementation's expiry for side-by-side comparability.
 pub fn issue(secret: &str, user_id: &str, role: Role) -> jsonwebtoken::errors::Result<String> {
     let claims = Claims {
         sub: user_id.to_string(),

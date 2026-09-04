@@ -1,7 +1,7 @@
-//! # pets, appointments per vet — computed on demand by directory scan
-//! (PLAN.md §6), same trade-off as derived availability (PLAN.md §4/§7):
-//! no `COUNT()` a database would give for free, but also nothing to keep in
-//! sync.
+//! # pets, appointments per vet — computed on demand by directory scan,
+//! same trade-off as derived availability (see `docs/architecture.md`'s
+//! Design Constraints): no `COUNT()` a database would give for free, but
+//! also nothing to keep in sync.
 
 use std::collections::HashMap;
 use std::path::Path;
