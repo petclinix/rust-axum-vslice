@@ -164,8 +164,13 @@ pub async fn login(
         .await
         .map_err(|_| AppError::Internal)??;
 
-    let token = token::issue(&config.jwt_secret, &user.id.to_string(), user.role)
-        .map_err(|_| AppError::Internal)?;
+    let token = token::issue(
+        &config.jwt_secret,
+        &user.id.to_string(),
+        &user.username,
+        user.role,
+    )
+    .map_err(|_| AppError::Internal)?;
 
     Ok(Json(LoginResponse {
         token,
@@ -214,8 +219,9 @@ fn login_locked(data_dir: &Path, req: LoginRequest) -> Result<model::User, AppEr
 }
 
 /// `GET /api/users/aboutme` — "who am I", from the caller's own verified
-/// JWT. The token carries `sub`/`role` only (`auth::token::Claims`), so
-/// this still needs one read to fill in `username`.
+/// JWT. `AuthUser` only carries `id`/`role` (`auth::extractor`), not the
+/// `username`/`scope` claims the token itself has, so this still needs one
+/// read to fill in `username`.
 pub async fn aboutme(
     State(config): State<Config>,
     auth: AuthUser,

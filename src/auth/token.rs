@@ -10,16 +10,33 @@ const EXPIRY: Duration = Duration::hours(1);
 pub struct Claims {
     /// Subject: the user id.
     pub sub: String,
+    pub username: String,
+    /// Wire-named `scope`, not `role` — the target frontend
+    /// (`java-springboot-react-mtier`'s React app) decodes the JWT
+    /// client-side and reads this exact claim name to build its
+    /// `hasRole`/route-guard state; it never calls back to the server for
+    /// it. Still just one `Role` value (this repo has no multi-role
+    /// users), serialized as the same bare uppercase string
+    /// (`"ADMIN"`/`"VET"`/`"OWNER"`) every other wire enum uses — the
+    /// frontend wraps a non-array `scope` into a one-element array itself.
+    #[serde(rename = "scope")]
     pub role: Role,
     /// Unix timestamp; `jsonwebtoken` checks this against "now" on decode.
     pub exp: i64,
 }
 
-/// Issues an HS256 JWT for `user_id`/`role`, 1h expiry — matches
-/// the java implementation's expiry for side-by-side comparability.
-pub fn issue(secret: &str, user_id: &str, role: Role) -> jsonwebtoken::errors::Result<String> {
+/// Issues an HS256 JWT for `user_id`/`username`/`role`, 1h expiry —
+/// matches the java implementation's expiry for side-by-side
+/// comparability.
+pub fn issue(
+    secret: &str,
+    user_id: &str,
+    username: &str,
+    role: Role,
+) -> jsonwebtoken::errors::Result<String> {
     let claims = Claims {
         sub: user_id.to_string(),
+        username: username.to_string(),
         role,
         exp: (OffsetDateTime::now_utc() + EXPIRY).unix_timestamp(),
     };
@@ -48,17 +65,34 @@ mod tests {
 
     #[test]
     fn issue_then_verify_round_trips_the_claims() {
-        let token = issue("secret", "user-1", Role::Owner).unwrap();
+        let token = issue("secret", "user-1", "alice", Role::Owner).unwrap();
 
         let claims = verify("secret", &token).unwrap();
 
         assert_eq!(claims.sub, "user-1");
+        assert_eq!(claims.username, "alice");
         assert_eq!(claims.role, Role::Owner);
     }
 
     #[test]
+    fn role_is_wire_named_scope() {
+        let token = issue("secret", "user-1", "alice", Role::Admin).unwrap();
+
+        let payload = jsonwebtoken::decode::<serde_json::Value>(
+            &token,
+            &DecodingKey::from_secret(b"secret"),
+            &Validation::default(),
+        )
+        .unwrap()
+        .claims;
+
+        assert_eq!(payload["scope"], "ADMIN");
+        assert!(payload.get("role").is_none());
+    }
+
+    #[test]
     fn verify_with_the_wrong_secret_fails() {
-        let token = issue("secret", "user-1", Role::Owner).unwrap();
+        let token = issue("secret", "user-1", "alice", Role::Owner).unwrap();
 
         let err = verify("wrong-secret", &token).unwrap_err();
 
@@ -69,6 +103,7 @@ mod tests {
     fn verify_an_expired_token_fails() {
         let claims = Claims {
             sub: "user-1".to_string(),
+            username: "alice".to_string(),
             role: Role::Owner,
             exp: (OffsetDateTime::now_utc() - Duration::hours(1)).unix_timestamp(),
         };

@@ -24,12 +24,13 @@ struct SeededUser {
 
 fn seed_user(data_dir: &Path, jwt_secret: &str, role: Role) -> SeededUser {
     let user_id = Uuid::new_v4();
+    let username = format!("{user_id}@example.com");
 
     registration::write_user(
         data_dir,
         &registration::User {
             id: user_id,
-            username: format!("{user_id}@example.com"),
+            username: username.clone(),
             password_hash: "unused".to_string(),
             role,
             is_active: true,
@@ -52,7 +53,7 @@ fn seed_user(data_dir: &Path, jwt_secret: &str, role: Role) -> SeededUser {
         None
     };
 
-    let token = token::issue(jwt_secret, &user_id.to_string(), role).unwrap();
+    let token = token::issue(jwt_secret, &user_id.to_string(), &username, role).unwrap();
     SeededUser { token, vet_id }
 }
 

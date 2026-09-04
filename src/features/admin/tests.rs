@@ -59,8 +59,13 @@ fn seed() -> Fixture {
         },
     )
     .unwrap();
-    let admin_token =
-        token::issue(&config.jwt_secret, &admin_user_id.to_string(), Role::Admin).unwrap();
+    let admin_token = token::issue(
+        &config.jwt_secret,
+        &admin_user_id.to_string(),
+        "admin@petclinix.local",
+        Role::Admin,
+    )
+    .unwrap();
 
     let owner_user_id = Uuid::new_v4();
     registration::write_user(
@@ -76,8 +81,13 @@ fn seed() -> Fixture {
         },
     )
     .unwrap();
-    let owner_token =
-        token::issue(&config.jwt_secret, &owner_user_id.to_string(), Role::Owner).unwrap();
+    let owner_token = token::issue(
+        &config.jwt_secret,
+        &owner_user_id.to_string(),
+        "owner@example.com",
+        Role::Owner,
+    )
+    .unwrap();
 
     Fixture {
         dir,

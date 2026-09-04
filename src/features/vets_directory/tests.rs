@@ -67,7 +67,13 @@ async fn list_vets_requires_the_owner_role() {
         },
     )
     .unwrap();
-    let vet_token = token::issue(&config.jwt_secret, &vet_user_id.to_string(), Role::Vet).unwrap();
+    let vet_token = token::issue(
+        &config.jwt_secret,
+        &vet_user_id.to_string(),
+        "vet@example.com",
+        Role::Vet,
+    )
+    .unwrap();
 
     let (status, _) = call(app_for(&config), Some(&vet_token)).await;
 
@@ -93,8 +99,13 @@ async fn list_vets_returns_every_vet_with_their_username() {
         },
     )
     .unwrap();
-    let owner_token =
-        token::issue(&config.jwt_secret, &owner_user_id.to_string(), Role::Owner).unwrap();
+    let owner_token = token::issue(
+        &config.jwt_secret,
+        &owner_user_id.to_string(),
+        "owner@example.com",
+        Role::Owner,
+    )
+    .unwrap();
 
     let vet_user_id = Uuid::new_v4();
     registration::write_user(

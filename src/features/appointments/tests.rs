@@ -74,8 +74,13 @@ fn seed() -> Fixture {
         },
     )
     .unwrap();
-    let owner_token =
-        token::issue(&config.jwt_secret, &owner_user_id.to_string(), Role::Owner).unwrap();
+    let owner_token = token::issue(
+        &config.jwt_secret,
+        &owner_user_id.to_string(),
+        &format!("{owner_user_id}@example.com"),
+        Role::Owner,
+    )
+    .unwrap();
 
     let pet_id = Uuid::new_v4();
     pets::write_pet(
@@ -119,7 +124,13 @@ fn seed() -> Fixture {
         },
     )
     .unwrap();
-    let vet_token = token::issue(&config.jwt_secret, &vet_user_id.to_string(), Role::Vet).unwrap();
+    let vet_token = token::issue(
+        &config.jwt_secret,
+        &vet_user_id.to_string(),
+        &format!("{vet_user_id}@example.com"),
+        Role::Vet,
+    )
+    .unwrap();
 
     let location_id = Uuid::new_v4();
     locations::write_location(
@@ -315,6 +326,7 @@ async fn book_with_someone_elses_pet_is_not_found() {
     let other_token = token::issue(
         &fixture.config.jwt_secret,
         &other_owner_user_id.to_string(),
+        &format!("{other_owner_user_id}@example.com"),
         Role::Owner,
     )
     .unwrap();
@@ -479,6 +491,7 @@ async fn a_vet_cannot_confirm_another_vets_appointment() {
     let other_vet_token = token::issue(
         &fixture.config.jwt_secret,
         &other_vet_user_id.to_string(),
+        &format!("{other_vet_user_id}@example.com"),
         Role::Vet,
     )
     .unwrap();

@@ -105,7 +105,7 @@ mod tests {
     #[tokio::test]
     async fn token_signed_with_a_different_secret_is_unauthenticated() {
         let user_id = Uuid::new_v4().to_string();
-        let token = token::issue("a-different-secret", &user_id, Role::Owner).unwrap();
+        let token = token::issue("a-different-secret", &user_id, "alice", Role::Owner).unwrap();
 
         let response = app()
             .oneshot(request(Some(&format!("Bearer {token}"))))
@@ -118,7 +118,7 @@ mod tests {
     #[tokio::test]
     async fn valid_token_extracts_id_and_role() {
         let user_id = Uuid::new_v4();
-        let token = token::issue("test-secret", &user_id.to_string(), Role::Vet).unwrap();
+        let token = token::issue("test-secret", &user_id.to_string(), "bob", Role::Vet).unwrap();
 
         let response = app()
             .oneshot(request(Some(&format!("Bearer {token}"))))
