@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::Role;
+use crate::domain::{self, Role};
 use crate::storage;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,6 +93,16 @@ pub fn find_user_by_username(data_dir: &Path, username: &str) -> io::Result<Opti
     Ok(users
         .into_iter()
         .find(|u| u.username.eq_ignore_ascii_case(username)))
+}
+
+/// Resolves a wire id (`domain::wire_id`) back to the `User` it was derived
+/// from — same directory-scan trade-off as `pets`/`locations`/
+/// `appointments`, since `admin`'s user CRUD addresses users by wire id
+/// like everywhere else now.
+pub fn find_user_by_wire_id(data_dir: &Path, wire_id: i64) -> io::Result<Option<User>> {
+    Ok(list_all_users(data_dir)?
+        .into_iter()
+        .find(|u| domain::wire_id(u.id) == wire_id))
 }
 
 pub fn write_owner(data_dir: &Path, owner: &Owner) -> io::Result<()> {
@@ -257,6 +267,19 @@ mod tests {
         let mut expected = vec![a, b];
         expected.sort_by_key(|u| u.id);
         assert_eq!(all, expected);
+    }
+
+    #[test]
+    fn find_user_by_wire_id_matches_and_no_match_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = sample_user("a@example.com");
+        write_user(dir.path(), &user).unwrap();
+
+        assert_eq!(
+            find_user_by_wire_id(dir.path(), domain::wire_id(user.id)).unwrap(),
+            Some(user)
+        );
+        assert_eq!(find_user_by_wire_id(dir.path(), 123456).unwrap(), None);
     }
 
     #[test]

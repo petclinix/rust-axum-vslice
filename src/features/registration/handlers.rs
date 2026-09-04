@@ -141,6 +141,7 @@ fn register_locked(data_dir: &Path, req: RegisterRequest) -> Result<RegisterResp
     // transaction it observes.
     if let Err(e) = activity::record(
         data_dir,
+        &user.username,
         "user_registered",
         serde_json::json!({"user_id": user.id, "role": user.role}),
     ) {
@@ -202,6 +203,7 @@ fn login_locked(data_dir: &Path, req: LoginRequest) -> Result<model::User, AppEr
 
     if let Err(e) = activity::record(
         data_dir,
+        &user.username,
         "user_login",
         serde_json::json!({"user_id": user.id}),
     ) {

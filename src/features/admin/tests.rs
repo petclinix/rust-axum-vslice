@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::auth::token;
 use crate::config::Config;
-use crate::domain::Role;
+use crate::domain::{self, Role};
 use crate::features::registration::model as registration;
 
 use super::router;
@@ -153,20 +153,21 @@ async fn list_users_returns_every_registered_user() {
 }
 
 #[tokio::test]
-async fn deactivate_user_flips_is_active() {
+async fn deactivate_user_flips_active() {
     let fixture = seed();
+    let owner_wire_id = domain::wire_id(fixture.owner_user_id);
 
     let (status, body) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/admin/users/{}/deactivate", fixture.owner_user_id),
+        "PUT",
+        &format!("/api/admin/users/{owner_wire_id}/deactivate"),
         Some(&fixture.admin_token),
         None,
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["is_active"], false);
+    assert_eq!(body["active"], false);
 
     let user = registration::read_user(fixture.data_dir(), fixture.owner_user_id)
         .unwrap()
@@ -175,13 +176,45 @@ async fn deactivate_user_flips_is_active() {
 }
 
 #[tokio::test]
+async fn activate_user_flips_active_back_on() {
+    let fixture = seed();
+    let owner_wire_id = domain::wire_id(fixture.owner_user_id);
+    call(
+        fixture.app(),
+        "PUT",
+        &format!("/api/admin/users/{owner_wire_id}/deactivate"),
+        Some(&fixture.admin_token),
+        None,
+    )
+    .await;
+
+    let (status, body) = call(
+        fixture.app(),
+        "PUT",
+        &format!("/api/admin/users/{owner_wire_id}/activate"),
+        Some(&fixture.admin_token),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["active"], true);
+
+    let user = registration::read_user(fixture.data_dir(), fixture.owner_user_id)
+        .unwrap()
+        .unwrap();
+    assert!(user.is_active);
+}
+
+#[tokio::test]
 async fn deactivate_user_requires_the_admin_role() {
     let fixture = seed();
+    let owner_wire_id = domain::wire_id(fixture.owner_user_id);
 
     let (status, _) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/admin/users/{}/deactivate", fixture.owner_user_id),
+        "PUT",
+        &format!("/api/admin/users/{owner_wire_id}/deactivate"),
         Some(&fixture.owner_token),
         None,
     )
@@ -196,8 +229,8 @@ async fn deactivate_a_missing_user_is_not_found() {
 
     let (status, _) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/admin/users/{}/deactivate", Uuid::new_v4()),
+        "PUT",
+        "/api/admin/users/999999999/deactivate",
         Some(&fixture.admin_token),
         None,
     )
@@ -236,7 +269,13 @@ async fn get_stats_returns_zero_counts_with_no_data() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["total_pets"], 0);
+    assert_eq!(body["totalPets"], 0);
+    // `seed()` writes a `User` for the owner but not an `Owner` profile
+    // record (these tests don't need one) — `totalOwners` counts `Owner`
+    // profiles, so it's 0 here, not 1.
+    assert_eq!(body["totalOwners"], 0);
+    assert_eq!(body["totalVets"], 0);
+    assert_eq!(body["totalAppointments"], 0);
 }
 
 #[tokio::test]
@@ -246,7 +285,7 @@ async fn list_activity_requires_the_admin_role() {
     let (status, _) = call(
         fixture.app(),
         "GET",
-        "/api/admin/activity",
+        "/api/admin/activity-logs",
         Some(&fixture.owner_token),
         None,
     )
@@ -276,7 +315,7 @@ async fn list_activity_reflects_events_recorded_by_other_slices() {
     let (status, body) = call(
         fixture.app(),
         "GET",
-        "/api/admin/activity",
+        "/api/admin/activity-logs",
         Some(&fixture.admin_token),
         None,
     )
@@ -284,10 +323,12 @@ async fn list_activity_reflects_events_recorded_by_other_slices() {
 
     assert_eq!(status, StatusCode::OK);
     let events = body.as_array().unwrap();
-    assert!(
-        events.iter().any(|e| e["event_type"] == "user_registered"),
-        "expected a user_registered event, got {events:?}"
-    );
+    let registered = events
+        .iter()
+        .find(|e| e["action"] == "user_registered")
+        .unwrap_or_else(|| panic!("expected a user_registered event, got {events:?}"));
+    assert_eq!(registered["username"], "newowner@example.com");
+    assert!(registered["id"].is_i64());
 }
 
 #[tokio::test]
@@ -317,7 +358,7 @@ async fn list_activity_with_a_date_filter_returns_todays_events() {
     let (status, body) = call(
         fixture.app(),
         "GET",
-        &format!("/api/admin/activity?date={today_str}"),
+        &format!("/api/admin/activity-logs?date={today_str}"),
         Some(&fixture.admin_token),
         None,
     )

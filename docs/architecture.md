@@ -72,8 +72,8 @@ module; only `model` (and, for `admin`, `activity`) is `pub`, per Design Constra
 - **`visits`** — a vet's free-text summary (`vetSummary`/`ownerSummary`/
   `vaccination`) on a confirmed appointment, recorded via the same `PUT` that
   completes it; owner-facing history. Owns `visits/`.
-- **`admin`** — user list/deactivate, the append-only activity log other slices
-  write into, and on-demand stats. Owns `activity_log/`.
+- **`admin`** — user list/deactivate/activate, the append-only activity log other
+  slices write into, and on-demand stats. Owns `activity_log/`.
 
 ## On-Disk Data Layout
 
@@ -218,8 +218,9 @@ human-readable serde encoding (`"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS.f"`).
 | `PUT /api/vet/visits/{appointmentId}` | vet | visits (creates or replaces; also completes the appointment) |
 | `GET /api/owner/pets/{petId}/visits` | owner | visits |
 | `GET /api/admin/users` | admin | admin |
-| `POST /api/admin/users/{id}/deactivate` | admin | admin |
-| `GET /api/admin/activity` | admin | admin |
+| `PUT /api/admin/users/{id}/deactivate` | admin | admin |
+| `PUT /api/admin/users/{id}/activate` | admin | admin |
+| `GET /api/admin/activity-logs?date=` | admin | admin (`date` is an extra optional filter — see below) |
 | `GET /api/admin/stats` | admin | admin |
 
 There is no `complete` endpoint anywhere in the surface above — the target
@@ -228,6 +229,15 @@ reaches `Completed` only as a side effect of `PUT /api/vet/visits/{appointmentId
 (`visits::handlers::put_vet_visit`), which is also what makes that endpoint an
 upsert rather than a one-shot create: the first successful call transitions the
 appointment, and any later call just replaces the visit's text fields in place.
+
+`GET /api/admin/activity-logs`'s `date` query param isn't in the target contract
+(it declares no params for this endpoint), but it's additive, not a divergence — a
+spec-following client that never sends it still gets the full list. Every activity
+log entry now carries the username of whoever performed the action (the actor, not
+the resource acted on — e.g. `user_deactivated` records the admin who deactivated,
+not the deactivated user) and a `domain::wire_id`-derived `id`, since the target
+contract's `ActivityLogEntry` needs both and this repo's append-only NDJSON lines
+had neither before.
 
 Appointment state machine: `Booked → Confirmed → Completed/Cancelled/NoShow`.
 `AppointmentStatus::can_transition_to` (`domain.rs`) is the single source of truth

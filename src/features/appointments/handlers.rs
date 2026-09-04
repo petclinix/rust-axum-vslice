@@ -131,10 +131,21 @@ fn appointment_not_found() -> AppError {
     AppError::NotFound("appointment not found".to_string())
 }
 
+/// Best-effort: a missing username shouldn't fail an appointment mutation
+/// that already succeeded — falls back to an empty string, same as the
+/// logging failure below it.
+fn resolve_username(data_dir: &Path, user_id: Uuid) -> String {
+    registration::read_user(data_dir, user_id)
+        .ok()
+        .flatten()
+        .map(|u| u.username)
+        .unwrap_or_default()
+}
+
 /// Best-effort: a logging failure shouldn't fail an
 /// appointment mutation that already succeeded.
-fn log_activity(data_dir: &Path, event_type: &str, details: serde_json::Value) {
-    if let Err(e) = activity::record(data_dir, event_type, details) {
+fn log_activity(data_dir: &Path, username: &str, event_type: &str, details: serde_json::Value) {
+    if let Err(e) = activity::record(data_dir, username, event_type, details) {
         tracing::warn!(error = %e, "failed to record activity log entry");
     }
 }
@@ -222,6 +233,7 @@ fn create_appointment_blocking(
     model::write_appointment(data_dir, &appointment)?;
     log_activity(
         data_dir,
+        &resolve_username(data_dir, user_id),
         "appointment_booked",
         serde_json::json!({
             "appointment_id": appointment.id,
@@ -345,6 +357,7 @@ fn cancel_blocking(
     model::write_appointment(data_dir, &appointment)?;
     log_activity(
         data_dir,
+        &resolve_username(data_dir, user_id),
         "appointment_cancelled",
         serde_json::json!({"appointment_id": appointment.id, "vet_id": appointment.vet_id}),
     );
@@ -442,6 +455,7 @@ fn reschedule_blocking(
     model::write_appointment(data_dir, &new_appointment)?;
     log_activity(
         data_dir,
+        &resolve_username(data_dir, user_id),
         "appointment_rescheduled",
         serde_json::json!({
             "old_appointment_id": old.id,
@@ -527,6 +541,7 @@ fn vet_transition_blocking(
     };
     log_activity(
         data_dir,
+        &resolve_username(data_dir, user_id),
         event_type,
         serde_json::json!({"appointment_id": appointment.id, "vet_id": vet_id}),
     );

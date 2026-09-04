@@ -2,7 +2,7 @@
 //! (no self-registration path exists for it — see `docs/architecture.md`'s
 //! Auth Design section), lists users,
 //! reads stats and the activity log other slices wrote to, then deactivates
-//! a user and confirms it can no longer log in.
+//! a user (confirming it can no longer log in) and reactivates them.
 
 mod support;
 
@@ -50,7 +50,7 @@ async fn admin_can_manage_users_and_read_stats_and_activity() {
         .iter()
         .find(|u| u["username"] == "toDeactivate@example.com")
         .expect("registered owner should be listed");
-    let user_id = target["id"].as_str().unwrap();
+    let user_id = target["id"].as_i64().unwrap();
 
     let stats: serde_json::Value = client
         .get(server.url("/api/admin/stats"))
@@ -61,10 +61,11 @@ async fn admin_can_manage_users_and_read_stats_and_activity() {
         .json()
         .await
         .unwrap();
-    assert_eq!(stats["total_pets"], 0);
+    assert_eq!(stats["totalPets"], 0);
+    assert_eq!(stats["totalOwners"], 2);
 
     let activity: serde_json::Value = client
-        .get(server.url("/api/admin/activity"))
+        .get(server.url("/api/admin/activity-logs"))
         .bearer_auth(&admin_token)
         .send()
         .await
@@ -72,24 +73,28 @@ async fn admin_can_manage_users_and_read_stats_and_activity() {
         .json()
         .await
         .unwrap();
-    let event_types: Vec<&str> = activity
-        .as_array()
-        .unwrap()
+    let entries = activity.as_array().unwrap();
+    let actions: Vec<&str> = entries
         .iter()
-        .map(|e| e["event_type"].as_str().unwrap())
+        .map(|e| e["action"].as_str().unwrap())
         .collect();
-    assert!(event_types.contains(&"user_registered"));
-    assert!(event_types.contains(&"user_login"));
+    assert!(actions.contains(&"user_registered"));
+    assert!(actions.contains(&"user_login"));
+    assert!(
+        entries
+            .iter()
+            .all(|e| e["id"].is_i64() && e["username"].is_string())
+    );
 
     let deactivate = client
-        .post(server.url(&format!("/api/admin/users/{user_id}/deactivate")))
+        .put(server.url(&format!("/api/admin/users/{user_id}/deactivate")))
         .bearer_auth(&admin_token)
         .send()
         .await
         .unwrap();
     assert_eq!(deactivate.status(), 200);
     let deactivated: serde_json::Value = deactivate.json().await.unwrap();
-    assert_eq!(deactivated["is_active"], false);
+    assert_eq!(deactivated["active"], false);
 
     let blocked_login = client
         .post(server.url("/api/auth/login"))
@@ -100,4 +105,22 @@ async fn admin_can_manage_users_and_read_stats_and_activity() {
     assert_eq!(blocked_login.status(), 403);
     let body: serde_json::Value = blocked_login.json().await.unwrap();
     assert_eq!(body["code"], "ACCOUNT_DEACTIVATED");
+
+    let activate = client
+        .put(server.url(&format!("/api/admin/users/{user_id}/activate")))
+        .bearer_auth(&admin_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(activate.status(), 200);
+    let activated: serde_json::Value = activate.json().await.unwrap();
+    assert_eq!(activated["active"], true);
+
+    let restored_login = client
+        .post(server.url("/api/auth/login"))
+        .json(&json!({"username": "toDeactivate@example.com", "password": "correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(restored_login.status(), 200);
 }

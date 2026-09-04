@@ -11,18 +11,48 @@ use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
+use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::config::Config;
-use crate::domain::Role;
+use crate::domain::{self, Role};
 use crate::error::AppError;
 
+/// Every event carries the username of whoever performed it — login,
+/// register: the user themselves; admin actions: the admin; appointment
+/// actions: the authenticated owner/vet who triggered them, not the
+/// resource being acted on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivityEvent {
+    pub id: Uuid,
+    pub username: String,
     #[serde(with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
     pub event_type: String,
     pub details: serde_json::Value,
+}
+
+/// `GET /api/admin/activity-logs`'s shape — matches the target contract's
+/// `ActivityLogEntry` exactly (`id`, `username`, `action`, `timestamp`;
+/// no `details`, unlike the richer on-disk `ActivityEvent`).
+#[derive(Debug, Serialize)]
+pub struct ActivityLogEntryResponse {
+    pub id: i64,
+    pub username: String,
+    pub action: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: OffsetDateTime,
+}
+
+impl From<ActivityEvent> for ActivityLogEntryResponse {
+    fn from(e: ActivityEvent) -> Self {
+        Self {
+            id: domain::wire_id(e.id),
+            username: e.username,
+            action: e.event_type,
+            timestamp: e.timestamp,
+        }
+    }
 }
 
 fn activity_log_dir(data_dir: &Path) -> PathBuf {
@@ -49,8 +79,15 @@ fn log_path(data_dir: &Path, date: Date) -> PathBuf {
 /// path the way booking is (`docs/architecture-internals.md` §1) — the
 /// same "no invariant to protect" trade-off as other non-critical writes
 /// (see `docs/architecture.md`'s Design Constraints).
-pub fn record(data_dir: &Path, event_type: &str, details: serde_json::Value) -> io::Result<()> {
+pub fn record(
+    data_dir: &Path,
+    username: &str,
+    event_type: &str,
+    details: serde_json::Value,
+) -> io::Result<()> {
     let event = ActivityEvent {
+        id: Uuid::new_v4(),
+        username: username.to_string(),
         timestamp: OffsetDateTime::now_utc(),
         event_type: event_type.to_string(),
         details,
@@ -112,11 +149,15 @@ pub struct ActivityQuery {
     pub date: Option<Date>,
 }
 
+/// `date` is an optional extra filter beyond what the target contract
+/// documents for this endpoint (it declares no query params at all) — a
+/// spec-following client that never sends it still gets the full list, so
+/// this is additive, not a divergence.
 pub async fn list_activity(
     State(config): State<Config>,
     auth: AuthUser,
     Query(query): Query<ActivityQuery>,
-) -> Result<Json<Vec<ActivityEvent>>, AppError> {
+) -> Result<Json<Vec<ActivityLogEntryResponse>>, AppError> {
     if auth.role != Role::Admin {
         return Err(AppError::Forbidden(
             "this endpoint requires the admin role".to_string(),
@@ -131,7 +172,12 @@ pub async fn list_activity(
     .await
     .map_err(|_| AppError::Internal)??;
 
-    Ok(Json(events))
+    Ok(Json(
+        events
+            .into_iter()
+            .map(ActivityLogEntryResponse::from)
+            .collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -144,14 +190,21 @@ mod tests {
     fn record_then_read_for_date_round_trips() {
         let dir = tempfile::tempdir().unwrap();
 
-        record(dir.path(), "user_login", json!({"user_id": "u1"})).unwrap();
-        record(dir.path(), "appointment_booked", json!({"id": "a1"})).unwrap();
+        record(dir.path(), "alice", "user_login", json!({"user_id": "u1"})).unwrap();
+        record(
+            dir.path(),
+            "alice",
+            "appointment_booked",
+            json!({"id": "a1"}),
+        )
+        .unwrap();
 
         let today = OffsetDateTime::now_utc().date();
         let events = read_for_date(dir.path(), today).unwrap();
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].event_type, "user_login");
+        assert_eq!(events[0].username, "alice");
         assert_eq!(events[1].event_type, "appointment_booked");
     }
 
@@ -171,11 +224,15 @@ mod tests {
         // Write directly to two different days' files to avoid depending on
         // real elapsed time between two `record` calls on the same day.
         let yesterday = ActivityEvent {
+            id: Uuid::new_v4(),
+            username: "alice".to_string(),
             timestamp: OffsetDateTime::now_utc() - time::Duration::days(1),
             event_type: "user_login".to_string(),
             details: json!({}),
         };
         let today = ActivityEvent {
+            id: Uuid::new_v4(),
+            username: "alice".to_string(),
             timestamp: OffsetDateTime::now_utc(),
             event_type: "appointment_booked".to_string(),
             details: json!({}),
