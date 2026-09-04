@@ -1,6 +1,5 @@
 pub mod admin;
 pub mod appointments;
-pub mod availability;
 pub mod locations;
 pub mod pets;
 pub mod registration;

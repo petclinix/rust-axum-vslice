@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::auth::token;
 use crate::config::Config;
-use crate::domain::{AppointmentStatus, Role};
+use crate::domain::{self, AppointmentStatus, AppointmentType, Role};
 use crate::features::appointments::model as appointments;
 use crate::features::pets::model as pets;
 use crate::features::registration::model as registration;
@@ -133,9 +133,11 @@ fn seed_appointment(fixture: &Fixture, status: AppointmentStatus) -> Uuid {
         id: Uuid::new_v4(),
         pet_id: fixture.pet_id,
         vet_id: fixture.vet_id,
+        location_id: Uuid::new_v4(),
         time_slot: datetime!(2026-09-07 10:00),
         duration_minutes: 30,
         status,
+        appointment_type: AppointmentType::Checkup,
     };
     appointments::write_appointment(fixture.data_dir(), &appointment).unwrap();
     appointment.id
@@ -184,7 +186,10 @@ async fn record_visit_on_a_completed_appointment_succeeds() {
     let (status, body) = call(
         fixture.app(),
         "POST",
-        &format!("/api/appointments/{appointment_id}/visit"),
+        &format!(
+            "/api/appointments/{}/visit",
+            domain::wire_id(appointment_id)
+        ),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
@@ -204,7 +209,10 @@ async fn record_visit_requires_the_vet_role() {
     let (status, _) = call(
         fixture.app(),
         "POST",
-        &format!("/api/appointments/{appointment_id}/visit"),
+        &format!(
+            "/api/appointments/{}/visit",
+            domain::wire_id(appointment_id)
+        ),
         Some(&fixture.owner_token),
         Some(visit_payload()),
     )
@@ -221,7 +229,10 @@ async fn record_visit_on_a_merely_booked_appointment_is_a_conflict() {
     let (status, body) = call(
         fixture.app(),
         "POST",
-        &format!("/api/appointments/{appointment_id}/visit"),
+        &format!(
+            "/api/appointments/{}/visit",
+            domain::wire_id(appointment_id)
+        ),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
@@ -238,7 +249,10 @@ async fn recording_a_visit_twice_is_a_conflict() {
     call(
         fixture.app(),
         "POST",
-        &format!("/api/appointments/{appointment_id}/visit"),
+        &format!(
+            "/api/appointments/{}/visit",
+            domain::wire_id(appointment_id)
+        ),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
@@ -247,7 +261,10 @@ async fn recording_a_visit_twice_is_a_conflict() {
     let (status, body) = call(
         fixture.app(),
         "POST",
-        &format!("/api/appointments/{appointment_id}/visit"),
+        &format!(
+            "/api/appointments/{}/visit",
+            domain::wire_id(appointment_id)
+        ),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
@@ -267,7 +284,10 @@ async fn record_visit_with_an_empty_remark_is_rejected() {
     let (status, _) = call(
         fixture.app(),
         "POST",
-        &format!("/api/appointments/{appointment_id}/visit"),
+        &format!(
+            "/api/appointments/{}/visit",
+            domain::wire_id(appointment_id)
+        ),
         Some(&fixture.vet_token),
         Some(payload),
     )
@@ -315,7 +335,10 @@ async fn record_visit_by_a_non_owning_vet_is_not_found() {
     let (status, _) = call(
         fixture.app(),
         "POST",
-        &format!("/api/appointments/{appointment_id}/visit"),
+        &format!(
+            "/api/appointments/{}/visit",
+            domain::wire_id(appointment_id)
+        ),
         Some(&other_vet_token),
         Some(visit_payload()),
     )
@@ -332,7 +355,7 @@ async fn list_for_pet_returns_only_appointments_with_a_recorded_visit() {
     call(
         fixture.app(),
         "POST",
-        &format!("/api/appointments/{visited}/visit"),
+        &format!("/api/appointments/{}/visit", domain::wire_id(visited)),
         Some(&fixture.vet_token),
         Some(visit_payload()),
     )
@@ -341,7 +364,7 @@ async fn list_for_pet_returns_only_appointments_with_a_recorded_visit() {
     let (status, body) = call(
         fixture.app(),
         "GET",
-        &format!("/api/pets/{}/visits", fixture.pet_id),
+        &format!("/api/pets/{}/visits", domain::wire_id(fixture.pet_id)),
         Some(&fixture.owner_token),
         None,
     )
@@ -360,7 +383,7 @@ async fn list_for_pet_requires_the_owner_role() {
     let (status, _) = call(
         fixture.app(),
         "GET",
-        &format!("/api/pets/{}/visits", fixture.pet_id),
+        &format!("/api/pets/{}/visits", domain::wire_id(fixture.pet_id)),
         Some(&fixture.vet_token),
         None,
     )
@@ -406,7 +429,7 @@ async fn list_for_someone_elses_pet_is_not_found() {
     let (status, _) = call(
         fixture.app(),
         "GET",
-        &format!("/api/pets/{}/visits", fixture.pet_id),
+        &format!("/api/pets/{}/visits", domain::wire_id(fixture.pet_id)),
         Some(&other_token),
         None,
     )

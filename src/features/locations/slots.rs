@@ -4,11 +4,15 @@
 //! appointments, from wherever they need to come from — this function
 //! doesn't know or care).
 //!
-//! This is the locations-owned replacement for the old
-//! `appointments::slots::derive_free_slots`, which took `&[Appointment]`
-//! directly; this one takes plain `&[TimeRange]` instead; so it has no
-//! dependency on the `appointments` slice at all, and the caller decides
-//! how "busy" gets computed.
+//! This replaced `appointments::slots::derive_free_slots`, which took
+//! `&[Appointment]` directly; this one takes plain `&[TimeRange]` instead,
+//! so it has no dependency on the `appointments` slice at all — the caller
+//! (`appointments::handlers::book`/`reschedule`, `locations::handlers::
+//! available_slots`) decides how "busy" gets computed. `appointments`'
+//! booking path uses a vet-wide busy scan (`model::read_active_for_vet`),
+//! not a location-scoped one: a vet's calendar is one calendar across every
+//! location they run, not a separate one per location — a location's
+//! weekly periods say when *it's* open, not when the vet is free.
 
 use time::{Date, PrimitiveDateTime};
 
@@ -32,6 +36,13 @@ pub fn derive_free_slots(
         .into_iter()
         .flat_map(|window| subtract_busy(window, busy))
         .collect()
+}
+
+/// Whether `requested` fits entirely inside one (not spanning across a gap
+/// between two) of `free`'s windows.
+pub fn fits_within_free_slots(free: &[TimeRange], requested: &TimeRange) -> bool {
+    free.iter()
+        .any(|slot| slot.start <= requested.start && requested.end <= slot.end)
 }
 
 /// An override, when present, replaces the weekly recurring schedule for
@@ -269,5 +280,28 @@ mod tests {
         let free = derive_free_slots(TODAY, &[], Some(&over), &busy);
 
         assert_eq!(free, vec![range("14:00", "15:00"), range("15:30", "16:00")]);
+    }
+
+    #[test]
+    fn fits_within_free_slots_accepts_an_exact_match() {
+        let free = vec![range("9:00", "10:00")];
+        assert!(fits_within_free_slots(&free, &range("9:00", "10:00")));
+    }
+
+    #[test]
+    fn fits_within_free_slots_accepts_a_sub_range() {
+        let free = vec![range("9:00", "12:00")];
+        assert!(fits_within_free_slots(&free, &range("10:00", "10:30")));
+    }
+
+    #[test]
+    fn fits_within_free_slots_rejects_a_range_spanning_a_gap() {
+        let free = vec![range("9:00", "10:00"), range("10:30", "12:00")];
+        assert!(!fits_within_free_slots(&free, &range("9:30", "11:00")));
+    }
+
+    #[test]
+    fn fits_within_free_slots_rejects_when_nothing_is_free() {
+        assert!(!fits_within_free_slots(&[], &range("9:00", "9:30")));
     }
 }

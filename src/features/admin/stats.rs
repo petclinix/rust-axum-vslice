@@ -64,7 +64,7 @@ fn get_stats_blocking(data_dir: &Path) -> Result<StatsResponse, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::AppointmentStatus;
+    use crate::domain::{AppointmentStatus, AppointmentType};
     use time::macros::{date, datetime};
 
     #[test]
@@ -115,9 +115,11 @@ mod tests {
                 id: Uuid::new_v4(),
                 pet_id: Uuid::new_v4(),
                 vet_id: vet_with_appointments,
+                location_id: Uuid::new_v4(),
                 time_slot: datetime!(2026-09-07 10:00),
                 duration_minutes: 30,
                 status: AppointmentStatus::Booked,
+                appointment_type: AppointmentType::Checkup,
             },
         )
         .unwrap();

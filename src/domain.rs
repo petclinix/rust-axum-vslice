@@ -39,9 +39,11 @@ pub fn wire_id(id: Uuid) -> i64 {
 /// Completed/Cancelled/NoShow`. `Cancelled` is reachable from both `Booked`
 /// and `Confirmed` (cancellation is cutoff-gated, not confirm-gated).
 /// `Completed`, `Cancelled`, and `NoShow` are terminal — nothing transitions
-/// out of them.
+/// out of them. Wire-cased `SCREAMING_SNAKE_CASE` to match the target
+/// contract in `docs/petclinix-openapi-snapshot.json`
+/// (`BOOKED`/`CONFIRMED`/`COMPLETED`/`CANCELLED`/`NO_SHOW`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AppointmentStatus {
     Booked,
     Confirmed,

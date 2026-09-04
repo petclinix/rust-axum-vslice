@@ -75,7 +75,7 @@ async fn list_vets_requires_the_owner_role() {
 }
 
 #[tokio::test]
-async fn list_vets_returns_every_vet_with_name_and_specialty() {
+async fn list_vets_returns_every_vet_with_their_username() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config::for_test(dir.path().to_path_buf());
 
@@ -96,11 +96,25 @@ async fn list_vets_returns_every_vet_with_name_and_specialty() {
     let owner_token =
         token::issue(&config.jwt_secret, &owner_user_id.to_string(), Role::Owner).unwrap();
 
+    let vet_user_id = Uuid::new_v4();
+    registration::write_user(
+        dir.path(),
+        &registration::User {
+            id: vet_user_id,
+            username: "dr-bob".to_string(),
+            password_hash: "unused".to_string(),
+            role: Role::Vet,
+            is_active: true,
+            created_at: OffsetDateTime::now_utc(),
+            last_login: None,
+        },
+    )
+    .unwrap();
     registration::write_vet(
         dir.path(),
         &registration::Vet {
             id: Uuid::new_v4(),
-            user_id: Uuid::new_v4(),
+            user_id: vet_user_id,
             name: "Dr. Bob".to_string(),
             specialty: "Surgery".to_string(),
         },
@@ -112,6 +126,6 @@ async fn list_vets_returns_every_vet_with_name_and_specialty() {
     assert_eq!(status, StatusCode::OK);
     let vets = body.as_array().unwrap();
     assert_eq!(vets.len(), 1);
-    assert_eq!(vets[0]["name"], "Dr. Bob");
-    assert_eq!(vets[0]["specialty"], "Surgery");
+    assert_eq!(vets[0]["username"], "dr-bob");
+    assert!(vets[0]["id"].is_i64());
 }

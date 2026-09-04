@@ -260,6 +260,10 @@ wrong, not the test.
 
 ## 5. Recurring Availability: The Exception-Overrides-Template Rule
 
+*Historical: describes the `availability` slice, since replaced by
+`locations` (§10) — kept for the design rationale, which §10 carries
+forward rather than re-deriving.*
+
 ### The two sources
 
 A vet's bookable hours come from two places: `AvailabilitySlot` (a recurring
@@ -321,14 +325,14 @@ sitting inside another range's interior would spuriously "overlap" it — a real
 caught by this file's own test suite before it ever reached `appointments::slots`,
 not a hypothetical.
 
-### The same rule, twice, for now
+### Superseded by `locations`
 
-`locations::slots::derive_free_slots` (§10) ports this exact rule onto
-`OpeningPeriod`/`OpeningOverride` instead of `AvailabilitySlot`/
-`AvailabilityException` — an override fully determines its date, same as an
-exception here. The two implementations coexist because `appointments`' booking
-path still reads `availability` directly; `locations` isn't wired into booking
-yet. `availability` gets deleted once it is, not before — see §10.
+This section describes the `availability` slice, since deleted —
+`locations::slots::derive_free_slots` (§10) carries the exact same rule
+forward onto `OpeningPeriod`/`OpeningOverride` instead of `AvailabilitySlot`/
+`AvailabilityException`: an override still fully determines its date, same
+reasoning as above. Kept here for the historical "why," since §10 doesn't
+re-derive it.
 
 ---
 
@@ -545,27 +549,20 @@ that only shows up when several pieces run together for real.
 
 ---
 
-## 10. `locations` Replaces Per-Vet `availability` — Eventually
+## 10. `locations` Replaced Per-Vet `availability`
 
 The target contract (`docs/petclinix-openapi-snapshot.json`) has no per-vet
 availability endpoints at all — only per-location ones, and its
 `BookableLocation` carries a single `vetUsername`, so a location belongs to
 exactly one vet. `locations` is the wire-compatible replacement: same
-weekly-template-plus-date-override shape as `availability` (§5), just
+weekly-template-plus-date-override shape `availability` had (§5), just
 re-homed under a location a vet explicitly creates (`POST /api/locations`)
 instead of a template attached to the vet directly, and a vet can now own
-several.
-
-### Not deleting `availability` yet
-
+several. `availability` and `appointments::slots` are both deleted —
 `appointments`' booking path (`free_slots_for` in `appointments::handlers`)
-still reads `availability::model::read_weekly`/`find_exception_by_date`
-directly — it hasn't been rewired onto `locations` yet, so deleting
-`availability` now would break booking. Both slices' routes are live at once
-for now: `/api/vets/availability*` (old) and `/api/locations*` /
-`/api/owner/locations*` (new). `availability` gets deleted, and
-`appointments::slots` along with it, once booking itself moves onto
-`locations::slots::derive_free_slots` in a later pass.
+computes free time via `locations::model::read_periods`/
+`find_override_by_date` and `locations::slots::derive_free_slots` now, the
+same function `locations::handlers::available_slots` uses.
 
 ### Wire ids, the same way `pets` does it
 
@@ -574,8 +571,9 @@ as `pets` (§6) — `Uuid` stays the storage key, `GET`/`PUT`/`DELETE
 /api/locations/{id}` resolve the wire id back to it via
 `model::find_by_vet_and_wire_id` (scoped to the calling vet — it's their own
 data) or `model::find_by_wire_id` (unscoped — an owner discovering a
-location to book doesn't know or care which vet it belongs to, the same way
-`GET /api/vets/{id}/slots` needs no ownership check today).
+location to book doesn't know or care which vet it belongs to). Every
+`Appointment` now carries the same treatment for its own id, `vetId`,
+`petId`, and `locationId`.
 
 ### `dayOfWeek` as a wire integer, not an enum string
 
@@ -588,26 +586,27 @@ the boundary via `DayOfWeek::iso_number`/`from_iso_number` rather than
 teaching the type itself to serialize two different ways depending on
 context.
 
-### Interim approximation: a location's busy time is its vet's busy time
+### A location's busy time is its vet's busy time — on purpose
 
-`GET /owner/locations/{id}/available-slots` needs to know what's already
-booked at a location. `Appointment` doesn't carry a `location_id` yet (that
-lands when `appointments` itself moves onto the target contract), so
-`available_slots_blocking` uses the location's vet's *entire* active-
-appointment calendar as a stand-in — correct for a vet with exactly one
-location, over-blocks one running several, since a booking at location A
-would incorrectly also show as busy time at that same vet's location B. This
-is a known, temporary approximation, not a modeling decision to keep:
-revisit it in the same pass that adds `location_id` to `Appointment`.
+`GET /owner/locations/{id}/available-slots` and `appointments`' own booking
+path both need to know what's already booked. Both use the location's vet's
+*entire* active-appointment calendar (`appointments::model::
+read_active_for_vet`), not a per-location one — not an approximation, but
+the actual invariant: a vet has one calendar across every location they run,
+not a separate one per location, the same way a real vet can't be in two
+places at once. `Appointment.location_id` records *where* a booking happens
+(and lets `AppointmentResponse` and `Location` cross-reference each other),
+but conflict-checking and the booking `flock` both stay keyed by `vet_id` —
+see `locations::slots`'s own doc comment.
 
 ### `appointmentType` is accepted, not yet used
 
-The query param is required by the target contract and validated (an
-unrecognized value is rejected — via axum's own `Query` extractor
-rejection, so a 400, not the `Json` extractor's 422), but nothing in the
-domain model ties appointment type to slot duration, and `appointments`
-doesn't carry this field yet either. `#[allow(dead_code)]` on the field is
-deliberate, not an oversight: the parameter's presence and validation is the
-part of the contract being honored right now; folding it into the actual
-computation is future work once `appointments` needs the same enum
-(`domain::AppointmentType`).
+`AvailableSlotsQuery.appointment_type` and `AppointmentRequest.appointment_type`
+are both required by the target contract and validated (an unrecognized
+value 422s off `Json`, 400s off `Query` — an axum framework distinction, not
+a choice made here), but nothing in the domain model ties appointment type
+to slot duration — every booking uses `Config::appointment_default_duration_min`
+regardless of `appointmentType`. `#[allow(dead_code)]` on the query field is
+deliberate: the parameter's presence and validation is the part of the
+contract being honored; folding it into an actual duration rule would be
+inventing a business rule neither spec describes.

@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use crate::auth::token;
 use crate::config::Config;
-use crate::domain::Role;
-use crate::features::availability::model::{self as availability, AvailabilitySlot, DayOfWeek};
+use crate::domain::{self, Role};
+use crate::features::locations::model::{self as locations, DayOfWeek, Location, OpeningPeriod};
 use crate::features::pets::model as pets;
 use crate::features::registration::model as registration;
 
@@ -24,9 +24,10 @@ struct Fixture {
     dir: tempfile::TempDir,
     config: Config,
     owner_token: String,
-    pet_id: Uuid,
+    pet_id: i64,
     vet_token: String,
     vet_id: Uuid,
+    location_id: i64,
 }
 
 impl Fixture {
@@ -39,9 +40,10 @@ impl Fixture {
     }
 }
 
-/// Seeds an owner + their pet, a vet, and a Monday 9:00-17:00 weekly
-/// schedule for that vet. Using a fixed weekday (rather than "today") keeps
-/// every non-cutoff test deterministic regardless of when it runs.
+/// Seeds an owner + their pet, a vet, and a location with a Monday
+/// 9:00-17:00 weekly opening period for that vet. Using a fixed weekday
+/// (rather than "today") keeps every non-cutoff test deterministic
+/// regardless of when it runs.
 fn seed() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let config = Config::for_test(dir.path().to_path_buf());
@@ -119,14 +121,30 @@ fn seed() -> Fixture {
     .unwrap();
     let vet_token = token::issue(&config.jwt_secret, &vet_user_id.to_string(), Role::Vet).unwrap();
 
-    availability::write_slot(
+    let location_id = Uuid::new_v4();
+    locations::write_location(
         data_dir,
-        &AvailabilitySlot {
-            id: Uuid::new_v4(),
+        &Location {
+            id: location_id,
             vet_id,
+            name: "Downtown Clinic".to_string(),
+            zone_id: "Europe/Vienna".to_string(),
+            street: "Main St 1".to_string(),
+            postal_code: "1010".to_string(),
+            city: "Vienna".to_string(),
+            country: "Austria".to_string(),
+        },
+    )
+    .unwrap();
+    locations::write_period(
+        data_dir,
+        &OpeningPeriod {
+            id: Uuid::new_v4(),
+            location_id,
             day_of_week: DayOfWeek::Monday,
             start_time: time!(9:00),
             end_time: time!(17:00),
+            sort_order: 0,
         },
     )
     .unwrap();
@@ -135,9 +153,10 @@ fn seed() -> Fixture {
         dir,
         config,
         owner_token,
-        pet_id,
+        pet_id: domain::wire_id(pet_id),
         vet_token,
         vet_id,
+        location_id: domain::wire_id(location_id),
     }
 }
 
@@ -172,7 +191,7 @@ async fn call(
     (status, json)
 }
 
-fn book_payload(fixture: &Fixture, time_slot: time::PrimitiveDateTime) -> Value {
+fn book_payload(fixture: &Fixture, starts_at: time::PrimitiveDateTime) -> Value {
     // Serialize via serde (`json!` calls `Serialize`, not `Display`) so this
     // produces exactly the zero-padded wire format the server's own
     // `Deserialize` impl expects. `PrimitiveDateTime`'s `Display` (i.e.
@@ -180,10 +199,10 @@ fn book_payload(fixture: &Fixture, time_slot: time::PrimitiveDateTime) -> Value 
     // `Serialize` impl does — using it here intermittently broke this
     // payload once a day, for whichever hour happened to be single-digit.
     json!({
-        "pet_id": fixture.pet_id,
-        "vet_id": fixture.vet_id,
-        "time_slot": time_slot,
-        "duration_minutes": 30,
+        "locationId": fixture.location_id,
+        "petId": fixture.pet_id,
+        "startsAt": starts_at,
+        "appointmentType": "CHECKUP",
     })
 }
 
@@ -194,7 +213,7 @@ async fn book_without_auth_is_unauthenticated() {
     let (status, _) = call(
         fixture.app(),
         "POST",
-        "/api/appointments",
+        "/api/owner/appointments",
         None,
         Some(book_payload(&fixture, datetime!(2026-09-07 10:00))),
     )
@@ -210,26 +229,27 @@ async fn book_success_returns_201_booked() {
     let (status, body) = call(
         fixture.app(),
         "POST",
-        "/api/appointments",
+        "/api/owner/appointments",
         Some(&fixture.owner_token),
         Some(book_payload(&fixture, datetime!(2026-09-07 10:00))),
     )
     .await;
 
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["status"], "booked");
-    assert_eq!(body["pet_id"], fixture.pet_id.to_string());
+    assert_eq!(body["status"], "BOOKED");
+    assert_eq!(body["petId"], fixture.pet_id);
+    assert_eq!(body["locationId"], fixture.location_id);
 }
 
 #[tokio::test]
 async fn book_outside_availability_is_slot_unavailable() {
     let fixture = seed();
 
-    // Tuesday: no weekly slot seeded for it.
+    // Tuesday: no weekly period seeded for it.
     let (status, body) = call(
         fixture.app(),
         "POST",
-        "/api/appointments",
+        "/api/owner/appointments",
         Some(&fixture.owner_token),
         Some(book_payload(&fixture, datetime!(2026-09-08 10:00))),
     )
@@ -245,7 +265,7 @@ async fn book_conflicting_with_an_existing_appointment_is_rejected() {
     call(
         fixture.app(),
         "POST",
-        "/api/appointments",
+        "/api/owner/appointments",
         Some(&fixture.owner_token),
         Some(book_payload(&fixture, datetime!(2026-09-07 10:00))),
     )
@@ -254,7 +274,7 @@ async fn book_conflicting_with_an_existing_appointment_is_rejected() {
     let (status, body) = call(
         fixture.app(),
         "POST",
-        "/api/appointments",
+        "/api/owner/appointments",
         Some(&fixture.owner_token),
         Some(book_payload(&fixture, datetime!(2026-09-07 10:15))),
     )
@@ -302,7 +322,7 @@ async fn book_with_someone_elses_pet_is_not_found() {
     let (status, _) = call(
         fixture.app(),
         "POST",
-        "/api/appointments",
+        "/api/owner/appointments",
         Some(&other_token),
         Some(book_payload(&fixture, datetime!(2026-09-07 10:00))),
     )
@@ -311,50 +331,51 @@ async fn book_with_someone_elses_pet_is_not_found() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-async fn book(fixture: &Fixture, time_slot: time::PrimitiveDateTime) -> Uuid {
+async fn book(fixture: &Fixture, starts_at: time::PrimitiveDateTime) -> i64 {
     let (status, body) = call(
         fixture.app(),
         "POST",
-        "/api/appointments",
+        "/api/owner/appointments",
         Some(&fixture.owner_token),
-        Some(book_payload(fixture, time_slot)),
+        Some(book_payload(fixture, starts_at)),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "booking setup failed: {body}");
-    body["id"].as_str().unwrap().parse().unwrap()
+    body["id"].as_i64().unwrap()
 }
 
 #[tokio::test]
 async fn cancel_well_before_the_cutoff_succeeds() {
     let fixture = seed();
     seed_full_week_availability(fixture.data_dir(), fixture.vet_id);
-    let time_slot = snap_to_hour(OffsetDateTime::now_utc() + Duration::hours(48));
-    let id = book(&fixture, time_slot).await;
+    let starts_at = snap_to_hour(OffsetDateTime::now_utc() + Duration::hours(48));
+    let id = book(&fixture, starts_at).await;
 
-    let (status, body) = call(
+    let (status, _) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/appointments/{id}/cancel"),
+        "DELETE",
+        &format!("/api/owner/appointments/{id}"),
         Some(&fixture.owner_token),
         None,
     )
     .await;
 
+    // The target contract declares this endpoint `200 OK` with no content —
+    // unlike `POST`/`GET`/reschedule, which return the `Appointment` body.
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "cancelled");
 }
 
 #[tokio::test]
 async fn cancel_after_the_cutoff_is_rejected() {
     let fixture = seed();
     seed_full_week_availability(fixture.data_dir(), fixture.vet_id);
-    let time_slot = snap_to_hour(OffsetDateTime::now_utc() + Duration::hours(1));
-    let id = book(&fixture, time_slot).await;
+    let starts_at = snap_to_hour(OffsetDateTime::now_utc() + Duration::hours(1));
+    let id = book(&fixture, starts_at).await;
 
     let (status, body) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/appointments/{id}/cancel"),
+        "DELETE",
+        &format!("/api/owner/appointments/{id}"),
         Some(&fixture.owner_token),
         None,
     )
@@ -369,16 +390,16 @@ async fn confirm_then_complete_flow() {
     let fixture = seed();
     let id = book(&fixture, datetime!(2026-09-07 10:00)).await;
 
-    let (status, body) = call(
+    let (status, _) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/appointments/{id}/confirm"),
+        "PUT",
+        &format!("/api/vet/appointments/{id}/confirm"),
         Some(&fixture.vet_token),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "confirmed");
+    assert_eq!(status_of(&fixture, id).await, "CONFIRMED");
 
     let (status, body) = call(
         fixture.app(),
@@ -389,7 +410,30 @@ async fn confirm_then_complete_flow() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "completed");
+    assert_eq!(body["status"], "COMPLETED");
+}
+
+/// `PUT .../confirm` and `.../no-show` return no body (see
+/// `cancel_well_before_the_cutoff_succeeds`'s comment), so tests that need
+/// to observe the resulting status look it up via the vet's calendar
+/// instead.
+async fn status_of(fixture: &Fixture, id: i64) -> String {
+    let (_, body) = call(
+        fixture.app(),
+        "GET",
+        "/api/vet/appointments",
+        Some(&fixture.vet_token),
+        None,
+    )
+    .await;
+    body.as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == id)
+        .expect("booked appointment should be on the vet's calendar")["status"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 #[tokio::test]
@@ -399,8 +443,8 @@ async fn no_show_on_a_merely_booked_appointment_is_an_invalid_transition() {
 
     let (status, body) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/appointments/{id}/no-show"),
+        "PUT",
+        &format!("/api/vet/appointments/{id}/no-show"),
         Some(&fixture.vet_token),
         None,
     )
@@ -448,8 +492,8 @@ async fn a_vet_cannot_confirm_another_vets_appointment() {
 
     let (status, _) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/appointments/{id}/confirm"),
+        "PUT",
+        &format!("/api/vet/appointments/{id}/confirm"),
         Some(&other_vet_token),
         None,
     )
@@ -465,23 +509,23 @@ async fn reschedule_moves_the_appointment_and_frees_the_old_slot() {
 
     let (status, body) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/appointments/{id}/reschedule"),
+        "PUT",
+        &format!("/api/owner/appointments/{id}/reschedule"),
         Some(&fixture.owner_token),
-        Some(json!({"time_slot": "2026-09-07 14:00:00.0", "duration_minutes": 30})),
+        Some(json!({"startsAt": "2026-09-07 14:00:00.0"})),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "booked");
-    assert_eq!(body["time_slot"], "2026-09-07 14:00:00.0");
-    assert_ne!(body["id"], id.to_string());
+    assert_eq!(body["status"], "BOOKED");
+    assert_eq!(body["startsAt"], "2026-09-07 14:00:00.0");
+    assert_ne!(body["id"], id);
 
     // The old slot is free again — a fresh booking there should succeed.
     let (status, _) = call(
         fixture.app(),
         "POST",
-        "/api/appointments",
+        "/api/owner/appointments",
         Some(&fixture.owner_token),
         Some(book_payload(&fixture, datetime!(2026-09-07 10:00))),
     )
@@ -497,10 +541,10 @@ async fn reschedule_into_an_occupied_slot_is_rejected() {
 
     let (status, body) = call(
         fixture.app(),
-        "POST",
-        &format!("/api/appointments/{id}/reschedule"),
+        "PUT",
+        &format!("/api/owner/appointments/{id}/reschedule"),
         Some(&fixture.owner_token),
-        Some(json!({"time_slot": "2026-09-07 14:00:00.0", "duration_minutes": 30})),
+        Some(json!({"startsAt": "2026-09-07 14:00:00.0"})),
     )
     .await;
 
@@ -516,7 +560,7 @@ async fn list_mine_as_owner_returns_only_their_pets_appointments() {
     let (status, body) = call(
         fixture.app(),
         "GET",
-        "/api/appointments",
+        "/api/owner/appointments",
         Some(&fixture.owner_token),
         None,
     )
@@ -534,37 +578,22 @@ async fn list_mine_as_vet_returns_their_calendar() {
     let (status, body) = call(
         fixture.app(),
         "GET",
-        "/api/appointments",
+        "/api/vet/appointments",
         Some(&fixture.vet_token),
         None,
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn get_slots_returns_the_free_windows_around_a_booking() {
-    let fixture = seed();
-    book(&fixture, datetime!(2026-09-07 10:00)).await;
-
-    let (status, body) = call(
-        fixture.app(),
-        "GET",
-        &format!("/api/vets/{}/slots?date=2026-09-07", fixture.vet_id),
-        Some(&fixture.owner_token),
-        None,
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let windows = body.as_array().unwrap();
-    assert_eq!(windows.len(), 2);
-    assert_eq!(windows[0]["start"], "2026-09-07 09:00:00.0");
-    assert_eq!(windows[0]["end"], "2026-09-07 10:00:00.0");
-    assert_eq!(windows[1]["start"], "2026-09-07 10:30:00.0");
-    assert_eq!(windows[1]["end"], "2026-09-07 17:00:00.0");
+    let appointments = body.as_array().unwrap();
+    assert_eq!(appointments.len(), 1);
+    assert_eq!(appointments[0]["petName"], "Rex");
+    assert!(
+        appointments[0]["ownerUsername"]
+            .as_str()
+            .unwrap()
+            .contains('@')
+    );
 }
 
 /// The concurrency stress test (`docs/architecture-internals.md` §§1/4) — this repo's proof of
@@ -588,7 +617,7 @@ async fn concurrent_booking_of_the_same_slot_lets_exactly_one_succeed() {
             let (status, body) = call(
                 app,
                 "POST",
-                "/api/appointments",
+                "/api/owner/appointments",
                 Some(&token),
                 Some(payload),
             )
@@ -625,6 +654,13 @@ async fn concurrent_booking_of_the_same_slot_lets_exactly_one_succeed() {
 }
 
 fn seed_full_week_availability(data_dir: &Path, vet_id: Uuid) {
+    let location = locations::list_locations_for_vet(data_dir, vet_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("seed() already wrote one location for this vet");
+    locations::delete_all_periods(data_dir, location.id).unwrap();
+
     for day in [
         DayOfWeek::Monday,
         DayOfWeek::Tuesday,
@@ -634,14 +670,15 @@ fn seed_full_week_availability(data_dir: &Path, vet_id: Uuid) {
         DayOfWeek::Saturday,
         DayOfWeek::Sunday,
     ] {
-        availability::write_slot(
+        locations::write_period(
             data_dir,
-            &AvailabilitySlot {
+            &OpeningPeriod {
                 id: Uuid::new_v4(),
-                vet_id,
+                location_id: location.id,
                 day_of_week: day,
                 start_time: time::Time::MIDNIGHT,
                 end_time: time!(23:59:59),
+                sort_order: 0,
             },
         )
         .unwrap();

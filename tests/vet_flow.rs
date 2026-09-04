@@ -1,4 +1,4 @@
-//! Black-box vet journey (`docs/architecture-internals.md` §9): set availability → see a booking
+//! Black-box vet journey (`docs/architecture-internals.md` §9): create a location → see a booking
 //! land on the calendar → confirm → complete → record a visit → duplicate
 //! visit rejected → the visit shows up for the owner too.
 
@@ -19,26 +19,28 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .register_and_login("owner@example.com", json!({"type": "OWNER"}))
         .await;
 
-    client
-        .post(server.url("/api/vets/availability"))
+    let location: serde_json::Value = client
+        .post(server.url("/api/locations"))
         .bearer_auth(&vet_token)
-        .json(&json!({"slots": [
-            {"day_of_week": "monday", "start_time": "09:00:00.0", "end_time": "17:00:00.0"},
-        ]}))
-        .send()
-        .await
-        .unwrap();
-
-    let vets: serde_json::Value = client
-        .get(server.url("/api/vets"))
-        .bearer_auth(&owner_token)
+        .json(&json!({
+            "name": "Downtown Clinic",
+            "zoneId": "Europe/Vienna",
+            "street": "Main St 1",
+            "postalCode": "1010",
+            "city": "Vienna",
+            "country": "Austria",
+            "weeklyPeriods": [
+                {"dayOfWeek": 1, "startTime": "09:00:00.0", "endTime": "17:00:00.0"},
+            ],
+            "overrides": [],
+        }))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    let vet_id = vets[0]["id"].as_str().unwrap().to_string();
+    let location_id = location["id"].as_i64().unwrap();
 
     let pet: serde_json::Value = client
         .post(server.url("/api/pets"))
@@ -61,13 +63,13 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
     let pet_id = pet["id"].as_i64().unwrap();
 
     let booked: serde_json::Value = client
-        .post(server.url("/api/appointments"))
+        .post(server.url("/api/owner/appointments"))
         .bearer_auth(&owner_token)
         .json(&json!({
-            "pet_id": pet_id,
-            "vet_id": vet_id,
-            "time_slot": "2026-09-07 11:00:00.0",
-            "duration_minutes": 30,
+            "locationId": location_id,
+            "petId": pet_id,
+            "startsAt": "2026-09-07 11:00:00.0",
+            "appointmentType": "CHECKUP",
         }))
         .send()
         .await
@@ -75,11 +77,12 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .json()
         .await
         .unwrap();
-    let appointment_id = booked["id"].as_str().unwrap();
+    let appointment_id = booked["id"].as_i64().unwrap();
 
-    // The vet's own calendar shows it.
+    // The vet's own calendar shows it, with the pet name and owner
+    // username joined in.
     let calendar: serde_json::Value = client
-        .get(server.url("/api/appointments"))
+        .get(server.url("/api/vet/appointments"))
         .bearer_auth(&vet_token)
         .send()
         .await
@@ -87,27 +90,44 @@ async fn vet_can_run_an_appointment_through_to_a_recorded_visit() {
         .json()
         .await
         .unwrap();
-    assert_eq!(calendar.as_array().unwrap().len(), 1);
+    let calendar = calendar.as_array().unwrap();
+    assert_eq!(calendar.len(), 1);
+    assert_eq!(calendar[0]["petName"], "Whiskers");
+    assert_eq!(calendar[0]["ownerUsername"], "owner@example.com");
 
     // A booked appointment can't be no-showed directly.
     let premature_no_show = client
-        .post(server.url(&format!("/api/appointments/{appointment_id}/no-show")))
+        .put(server.url(&format!("/api/vet/appointments/{appointment_id}/no-show")))
         .bearer_auth(&vet_token)
         .send()
         .await
         .unwrap();
     assert_eq!(premature_no_show.status(), 409);
 
+    // Confirm/no-show return `200 OK` with no body per the target
+    // contract, so the resulting status is checked via the calendar.
     let confirm = client
-        .post(server.url(&format!("/api/appointments/{appointment_id}/confirm")))
+        .put(server.url(&format!("/api/vet/appointments/{appointment_id}/confirm")))
         .bearer_auth(&vet_token)
         .send()
         .await
         .unwrap();
     assert_eq!(confirm.status(), 200);
-    let confirmed: serde_json::Value = confirm.json().await.unwrap();
-    assert_eq!(confirmed["status"], "confirmed");
 
+    let calendar: serde_json::Value = client
+        .get(server.url("/api/vet/appointments"))
+        .bearer_auth(&vet_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(calendar[0]["status"], "CONFIRMED");
+
+    // `complete` stays at its old, unprefixed path for now — the target
+    // contract has no such endpoint; completing an appointment moves into
+    // the visit-write handler once `visits` itself is migrated.
     let complete = client
         .post(server.url(&format!("/api/appointments/{appointment_id}/complete")))
         .bearer_auth(&vet_token)

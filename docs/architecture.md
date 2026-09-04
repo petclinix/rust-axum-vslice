@@ -41,9 +41,8 @@ src/
     extractor.rs                 # AuthUser: axum FromRequestParts over the bearer token
   features/
     registration/          # register + login, for both owner and vet roles
-    vets_directory/          # read-only: list vets + specialties
+    vets_directory/          # read-only: list vets, id + username
     pets/                      # add/list/get/update/delete; owner-scoped; picture upload
-    availability/                # a vet's weekly schedule + one-off exceptions (being retired, see locations/)
     locations/                     # a vet's clinic addresses + weekly opening periods + overrides
     appointments/                  # the core slice: booking, state machine, the flock lock
     visits/                          # a vet's diagnosis/vaccination/notes on a completed appointment
@@ -59,15 +58,17 @@ module; only `model` (and, for `admin`, `activity`) is `pub`, per Design Constra
 
 - **`registration`** — user/owner/vet records, argon2 password hashing, JWT
   issuance. Owns `users/`, `owners/`, `vets/`.
-- **`vets_directory`** — read-only pass-through over `registration`'s `Vet` records,
-  for an owner picking who to book with. No `model.rs` of its own.
+- **`vets_directory`** — read-only pass-through over `registration`'s `Vet`/`User`
+  records, for an owner picking who to book with. No `model.rs` of its own.
 - **`pets`** — CRUD scoped to the calling owner, plus the inline base64
   picture upload/download (§6). Owns `pets/` and `uploads/pets/`.
-- **`availability`** — a vet's recurring weekly schedule and one-off date
-  exceptions. Owns `availability/` and `availability_exceptions/`.
-- **`appointments`** — the core slice: `slots::derive_free_slots` (pure), the
-  booking write path, the state machine, cancel/reschedule, and the `vet-<id>.lock`
-  every write path shares (§1). Owns `appointments/`.
+- **`locations`** — a vet's clinic addresses, each with its own recurring weekly
+  opening periods and one-off date overrides; replaces the old `availability` slice
+  (§10 of `docs/architecture-internals.md`). Owns `locations/`, `opening_periods/`,
+  `opening_overrides/`.
+- **`appointments`** — the core slice: booking (against a `locationId`, via
+  `locations::slots::derive_free_slots`), the state machine, cancel/reschedule, and
+  the `vet-<id>.lock` every write path shares (§1). Owns `appointments/`.
 - **`visits`** — a vet's diagnosis/vaccination/note on a completed appointment;
   owner-facing history. Owns `visits/`.
 - **`admin`** — user list/deactivate, the append-only activity log other slices
@@ -82,14 +83,15 @@ data/
   vets/<vet_id>.json
   pets/<pet_id>.json
   uploads/pets/<pet_id>/picture.<ext>
-  availability/<vet_id>/<availability_id>.json
-  availability_exceptions/<vet_id>/<id>.json
+  locations/<location_id>.json
+  opening_periods/<location_id>/<period_id>.json
+  opening_overrides/<location_id>/<override_id>.json
   appointments/<vet_id>/<appointment_id>.json
   visits/<appointment_id>.json           # filename *is* the appointment id — 0..1 per appointment
   activity_log/<yyyy-mm-dd>.ndjson       # append-only, one JSON object per line
   locks/
     vet-<vet_id>.lock                      # appointment writes for that vet (§1)
-    availability-<vet_id>.lock              # that vet's own schedule/exceptions
+    location-<location_id>.lock             # that location's own address/periods/overrides
     users.lock                               # register-time username-uniqueness check + write
 ```
 
@@ -194,9 +196,6 @@ human-readable serde encoding (`"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS.f"`).
 | `GET /api/pets/{id}` | owner | pets |
 | `PUT /api/pets/{id}` | owner | pets |
 | `DELETE /api/pets/{id}` | owner | pets (soft delete — flips `active`) |
-| `POST /api/vets/availability` | vet | availability (being retired, see locations) |
-| `POST /api/vets/availability/exceptions` | vet | availability (being retired, see locations) |
-| `GET /api/vets/{id}/slots?date=` | owner | appointments |
 | `GET /api/locations` | vet | locations (the caller's own) |
 | `POST /api/locations` | vet | locations |
 | `GET /api/locations/{id}` | vet | locations (the caller's own) |
@@ -204,19 +203,28 @@ human-readable serde encoding (`"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS.f"`).
 | `DELETE /api/locations/{id}` | vet | locations (the caller's own; hard delete) |
 | `GET /api/owner/locations` | owner | locations (every vet's, for discovery) |
 | `GET /api/owner/locations/{id}/available-slots?date=&appointmentType=` | owner | locations |
-| `POST /api/appointments` | owner | appointments |
-| `GET /api/appointments` | owner, vet | appointments ("mine": own pets' / own calendar) |
-| `POST /api/appointments/{id}/cancel` | owner, vet | appointments (cutoff-gated) |
-| `POST /api/appointments/{id}/reschedule` | owner | appointments |
-| `POST /api/appointments/{id}/confirm` | vet | appointments |
-| `POST /api/appointments/{id}/complete` | vet | appointments |
-| `POST /api/appointments/{id}/no-show` | vet | appointments |
+| `POST /api/owner/appointments` | owner | appointments |
+| `GET /api/owner/appointments` | owner | appointments ("mine": own pets') |
+| `DELETE /api/owner/appointments/{id}` | owner | appointments (cutoff-gated cancel; `200`, no body) |
+| `PUT /api/owner/appointments/{id}/reschedule` | owner | appointments |
+| `GET /api/vet/appointments` | vet | appointments (own calendar; denormalized pet/owner names) |
+| `DELETE /api/vet/appointments/{id}` | vet | appointments (cutoff-gated cancel; `200`, no body) |
+| `PUT /api/vet/appointments/{id}/confirm` | vet | appointments (`200`, no body) |
+| `PUT /api/vet/appointments/{id}/no-show` | vet | appointments (`200`, no body) |
+| `POST /api/appointments/{id}/complete` | vet | appointments (off-spec, temporary — see below) |
 | `POST /api/appointments/{id}/visit` | vet | visits |
 | `GET /api/pets/{id}/visits` | owner | visits |
 | `GET /api/admin/users` | admin | admin |
 | `POST /api/admin/users/{id}/deactivate` | admin | admin |
 | `GET /api/admin/activity` | admin | admin |
 | `GET /api/admin/stats` | admin | admin |
+
+`POST /api/appointments/{id}/complete` is deliberately off the target contract
+(`docs/petclinix-openapi-snapshot.json` has no `complete` endpoint at all — an
+appointment completes implicitly via the vet-visit write, once `visits` itself is
+migrated) and kept at its old, unprefixed path purely so `visits` stays reachable
+in the meantime; its `{id}` is the same wire id as everywhere else, not a raw
+`Uuid`.
 
 Appointment state machine: `Booked → Confirmed → Completed/Cancelled/NoShow`.
 `AppointmentStatus::can_transition_to` (`domain.rs`) is the single source of truth

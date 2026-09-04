@@ -109,6 +109,13 @@ pub fn find_owner_by_user_id(data_dir: &Path, user_id: Uuid) -> io::Result<Optio
     Ok(owners.into_iter().find(|o| o.user_id == user_id))
 }
 
+/// Cross-slice: `appointments`' `VetAppointment` view needs an owner's
+/// username, and only has the `Owner` id a pet is keyed by — same rationale
+/// as `list_all_vets`.
+pub fn list_all_owners(data_dir: &Path) -> io::Result<Vec<Owner>> {
+    storage::list_dir_json(&owners_dir(data_dir))
+}
+
 pub fn write_vet(data_dir: &Path, vet: &Vet) -> io::Result<()> {
     storage::atomic_write(&vet_path(data_dir, vet.id), vet)
 }

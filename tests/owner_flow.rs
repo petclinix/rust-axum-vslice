@@ -1,5 +1,6 @@
-//! Black-box owner journey (`docs/architecture-internals.md` §9): register → discover a vet → add a
-//! pet → check free slots → book → list "mine" → view pet detail → cancel.
+//! Black-box owner journey (`docs/architecture-internals.md` §9): register → discover a vet →
+//! create a pet → check free slots at their location → book → list "mine" →
+//! view pet detail → cancel.
 //! Driven entirely over real HTTP against a spawned instance, mirroring
 //! what a Playwright E2E suite would exercise through a UI.
 
@@ -20,17 +21,29 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
         .register_and_login("owner@example.com", json!({"type": "OWNER"}))
         .await;
 
-    // Vet sets a Monday 9:00-17:00 weekly schedule.
-    let set_availability = client
-        .post(server.url("/api/vets/availability"))
+    // Vet creates a location with a Monday 9:00-17:00 weekly schedule.
+    let location: serde_json::Value = client
+        .post(server.url("/api/locations"))
         .bearer_auth(&vet_token)
-        .json(&json!({"slots": [
-            {"day_of_week": "monday", "start_time": "09:00:00.0", "end_time": "17:00:00.0"},
-        ]}))
+        .json(&json!({
+            "name": "Downtown Clinic",
+            "zoneId": "Europe/Vienna",
+            "street": "Main St 1",
+            "postalCode": "1010",
+            "city": "Vienna",
+            "country": "Austria",
+            "weeklyPeriods": [
+                {"dayOfWeek": 1, "startTime": "09:00:00.0", "endTime": "17:00:00.0"},
+            ],
+            "overrides": [],
+        }))
         .send()
         .await
+        .unwrap()
+        .json()
+        .await
         .unwrap();
-    assert_eq!(set_availability.status(), 200);
+    let location_id = location["id"].as_i64().unwrap();
 
     // Owner discovers the vet through the directory — the only way to
     // learn a vet's id via the API.
@@ -47,9 +60,23 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
     assert_eq!(vets.len(), 1);
     // Registration no longer collects a specialty/name (the target wire
     // contract's `RegisterRequest` only carries `username`/`password`/
-    // `type`), so the vet's directory `name` now defaults to `username`.
-    assert_eq!(vets[0]["name"], "vet@example.com");
-    let vet_id = vets[0]["id"].as_str().unwrap();
+    // `type`), so the vet's directory `username` is the registered one.
+    assert_eq!(vets[0]["username"], "vet@example.com");
+
+    // And through the owner-facing bookable-locations listing, which
+    // carries the vet's username directly.
+    let bookable: serde_json::Value = client
+        .get(server.url("/api/owner/locations"))
+        .bearer_auth(&owner_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let bookable = bookable.as_array().unwrap();
+    assert_eq!(bookable.len(), 1);
+    assert_eq!(bookable[0]["vetUsername"], "vet@example.com");
 
     // Owner adds a pet.
     let pet: serde_json::Value = client
@@ -74,7 +101,9 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
 
     // Free slots for that Monday are the whole 9-17 window before booking.
     let free: serde_json::Value = client
-        .get(server.url(&format!("/api/vets/{vet_id}/slots?date=2026-09-07")))
+        .get(server.url(&format!(
+            "/api/owner/locations/{location_id}/available-slots?date=2026-09-07&appointmentType=CHECKUP"
+        )))
         .bearer_auth(&owner_token)
         .send()
         .await
@@ -84,30 +113,32 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
         .unwrap();
     let free = free.as_array().unwrap();
     assert_eq!(free.len(), 1);
-    assert_eq!(free[0]["start"], "2026-09-07 09:00:00.0");
-    assert_eq!(free[0]["end"], "2026-09-07 17:00:00.0");
+    assert_eq!(free[0]["startsAt"], "2026-09-07 09:00:00.0");
+    assert_eq!(free[0]["endsAt"], "2026-09-07 17:00:00.0");
 
     // Book.
     let book_response = client
-        .post(server.url("/api/appointments"))
+        .post(server.url("/api/owner/appointments"))
         .bearer_auth(&owner_token)
         .json(&json!({
-            "pet_id": pet_id,
-            "vet_id": vet_id,
-            "time_slot": "2026-09-07 10:00:00.0",
-            "duration_minutes": 30,
+            "locationId": location_id,
+            "petId": pet_id,
+            "startsAt": "2026-09-07 10:00:00.0",
+            "appointmentType": "CHECKUP",
         }))
         .send()
         .await
         .unwrap();
     assert_eq!(book_response.status(), 201);
     let appointment: serde_json::Value = book_response.json().await.unwrap();
-    assert_eq!(appointment["status"], "booked");
-    let appointment_id = appointment["id"].as_str().unwrap();
+    assert_eq!(appointment["status"], "BOOKED");
+    let appointment_id = appointment["id"].as_i64().unwrap();
 
     // The booked slot no longer shows up as free.
     let free_after: serde_json::Value = client
-        .get(server.url(&format!("/api/vets/{vet_id}/slots?date=2026-09-07")))
+        .get(server.url(&format!(
+            "/api/owner/locations/{location_id}/available-slots?date=2026-09-07&appointmentType=CHECKUP"
+        )))
         .bearer_auth(&owner_token)
         .send()
         .await
@@ -124,7 +155,7 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
 
     // "mine" lists it.
     let mine: serde_json::Value = client
-        .get(server.url("/api/appointments"))
+        .get(server.url("/api/owner/appointments"))
         .bearer_auth(&owner_token)
         .send()
         .await
@@ -146,16 +177,26 @@ async fn owner_can_book_and_then_cancel_an_appointment() {
         .unwrap();
     assert_eq!(pet_detail["name"], "Rex");
 
-    // Cancel — the booking is 4+ days out, well past the 24h cutoff.
+    // Cancel — the booking is 4+ days out, well past the 24h cutoff. The
+    // target contract declares this endpoint `200 OK` with no content.
     let cancel_response = client
-        .post(server.url(&format!("/api/appointments/{appointment_id}/cancel")))
+        .delete(server.url(&format!("/api/owner/appointments/{appointment_id}")))
         .bearer_auth(&owner_token)
         .send()
         .await
         .unwrap();
     assert_eq!(cancel_response.status(), 200);
-    let cancelled: serde_json::Value = cancel_response.json().await.unwrap();
-    assert_eq!(cancelled["status"], "cancelled");
+
+    let mine_after_cancel: serde_json::Value = client
+        .get(server.url("/api/owner/appointments"))
+        .bearer_auth(&owner_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(mine_after_cancel[0]["status"], "CANCELLED");
 }
 
 #[tokio::test]

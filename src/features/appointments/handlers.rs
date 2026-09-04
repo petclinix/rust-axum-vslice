@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use axum::Json;
-use axum::extract::{Path as PathParam, Query, State};
+use axum::extract::{Path as PathParam, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use time::{Date, Duration, OffsetDateTime, PrimitiveDateTime};
@@ -9,72 +9,90 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::config::Config;
-use crate::domain::{AppointmentStatus, Role, TimeRange};
+use crate::domain::{self, AppointmentStatus, AppointmentType, Role, TimeRange};
 use crate::error::AppError;
 use crate::features::admin::activity;
-use crate::features::availability::model as availability;
+use crate::features::locations::model as locations;
+use crate::features::locations::slots as locations_slots;
 use crate::features::pets::model as pets;
 use crate::features::registration::model as registration;
 
-use super::{lock, model, slots};
+use super::{lock, model};
 
+/// The target contract's `AppointmentRequest` — no duration (always
+/// `Config::appointment_default_duration_min`, since nothing in the domain
+/// model ties `appointmentType` to a different length) and no `vetId` (the
+/// vet is resolved from `locationId`, since a location belongs to exactly
+/// one vet).
 #[derive(Debug, Deserialize)]
-pub struct BookRequest {
-    pub pet_id: Uuid,
-    pub vet_id: Uuid,
-    pub time_slot: PrimitiveDateTime,
-    #[serde(default)]
-    pub duration_minutes: Option<i64>,
+pub struct AppointmentRequest {
+    #[serde(rename = "locationId")]
+    pub location_id: i64,
+    #[serde(rename = "petId")]
+    pub pet_id: i64,
+    #[serde(rename = "startsAt")]
+    pub starts_at: PrimitiveDateTime,
+    #[serde(rename = "appointmentType")]
+    pub appointment_type: AppointmentType,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RescheduleRequest {
-    pub time_slot: PrimitiveDateTime,
-    #[serde(default)]
-    pub duration_minutes: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FreeSlotsQuery {
-    pub date: Date,
+    #[serde(rename = "startsAt")]
+    pub starts_at: PrimitiveDateTime,
 }
 
 #[derive(Debug, Serialize)]
 pub struct AppointmentResponse {
-    pub id: Uuid,
-    pub pet_id: Uuid,
-    pub vet_id: Uuid,
-    pub time_slot: PrimitiveDateTime,
-    pub duration_minutes: i64,
+    pub id: i64,
+    #[serde(rename = "vetId")]
+    pub vet_id: i64,
+    #[serde(rename = "petId")]
+    pub pet_id: i64,
+    #[serde(rename = "startsAt")]
+    pub starts_at: PrimitiveDateTime,
+    #[serde(rename = "locationId")]
+    pub location_id: i64,
+    #[serde(rename = "endsAt")]
+    pub ends_at: PrimitiveDateTime,
     pub status: AppointmentStatus,
+    #[serde(rename = "appointmentType")]
+    pub appointment_type: AppointmentType,
 }
 
 impl From<model::Appointment> for AppointmentResponse {
     fn from(a: model::Appointment) -> Self {
         Self {
-            id: a.id,
-            pet_id: a.pet_id,
-            vet_id: a.vet_id,
-            time_slot: a.time_slot,
-            duration_minutes: a.duration_minutes,
+            id: domain::wire_id(a.id),
+            vet_id: domain::wire_id(a.vet_id),
+            pet_id: domain::wire_id(a.pet_id),
+            starts_at: a.time_slot,
+            location_id: domain::wire_id(a.location_id),
+            ends_at: a.time_slot + Duration::minutes(a.duration_minutes),
             status: a.status,
+            appointment_type: a.appointment_type,
         }
     }
 }
 
+/// `GET /api/vet/appointments`'s shape — a denormalized view (pet name,
+/// owner username) a vet's calendar needs and `AppointmentResponse` doesn't
+/// carry, matching the target contract's `VetAppointment` exactly (no
+/// `locationId`/`endsAt` here, unlike `AppointmentResponse`).
 #[derive(Debug, Serialize)]
-pub struct TimeRangeResponse {
-    pub start: PrimitiveDateTime,
-    pub end: PrimitiveDateTime,
-}
-
-impl From<TimeRange> for TimeRangeResponse {
-    fn from(r: TimeRange) -> Self {
-        Self {
-            start: r.start,
-            end: r.end,
-        }
-    }
+pub struct VetAppointmentResponse {
+    pub id: i64,
+    #[serde(rename = "petId")]
+    pub pet_id: i64,
+    #[serde(rename = "petName")]
+    pub pet_name: String,
+    #[serde(rename = "ownerUsername")]
+    pub owner_username: String,
+    #[serde(rename = "startsAt")]
+    pub starts_at: PrimitiveDateTime,
+    pub status: AppointmentStatus,
+    #[serde(rename = "appointmentType")]
+    pub appointment_type: AppointmentType,
 }
 
 fn resolve_owner_id(data_dir: &Path, user_id: Uuid) -> Result<Uuid, AppError> {
@@ -89,16 +107,24 @@ fn resolve_vet_id(data_dir: &Path, user_id: Uuid) -> Result<Uuid, AppError> {
     Ok(vet.id)
 }
 
-fn verify_pet_owned_by(data_dir: &Path, pet_id: Uuid, owner_id: Uuid) -> Result<(), AppError> {
-    let pet = pets::read_pet(data_dir, pet_id)?.ok_or_else(pet_not_found)?;
-    if pet.owner_id != owner_id {
-        return Err(pet_not_found());
-    }
-    Ok(())
+/// Cross-slice: `VetAppointmentResponse` needs the owner's username, and
+/// only has the `Owner` id a pet is keyed by.
+fn resolve_owner_username(data_dir: &Path, owner_id: Uuid) -> Result<String, AppError> {
+    let owner = registration::list_all_owners(data_dir)?
+        .into_iter()
+        .find(|o| o.id == owner_id)
+        .ok_or_else(|| AppError::NotFound("owner not found".to_string()))?;
+    let user = registration::read_user(data_dir, owner.user_id)?
+        .ok_or_else(|| AppError::NotFound("owner not found".to_string()))?;
+    Ok(user.username)
 }
 
 fn pet_not_found() -> AppError {
     AppError::NotFound("pet not found".to_string())
+}
+
+fn location_not_found() -> AppError {
+    AppError::NotFound("location not found".to_string())
 }
 
 fn appointment_not_found() -> AppError {
@@ -113,66 +139,36 @@ fn log_activity(data_dir: &Path, event_type: &str, details: serde_json::Value) {
     }
 }
 
+/// The free `[start, end)` windows for `location` on `date` — its own
+/// weekly periods/override, minus its vet's *entire* active-appointment
+/// calendar (not just appointments at this one location — see
+/// `locations::slots`'s doc comment for why that's scoped to the vet).
 fn free_slots_for(
     data_dir: &Path,
-    vet_id: Uuid,
+    location: &locations::Location,
     date: Date,
     exclude_appointment_id: Option<Uuid>,
 ) -> Result<Vec<TimeRange>, AppError> {
-    let weekly = availability::read_weekly(data_dir, vet_id)?;
-    let exception = availability::find_exception_by_date(data_dir, vet_id, date)?;
-    let active: Vec<_> = model::read_active_for_vet(data_dir, vet_id)?
+    let weekly = locations::read_periods(data_dir, location.id)?;
+    let over = locations::find_override_by_date(data_dir, location.id, date)?;
+    let busy: Vec<TimeRange> = model::read_active_for_vet(data_dir, location.vet_id)?
         .into_iter()
         .filter(|a| Some(a.id) != exclude_appointment_id)
+        .map(|a| a.time_range())
         .collect();
 
-    Ok(slots::derive_free_slots(
+    Ok(locations_slots::derive_free_slots(
         date,
         &weekly,
-        exception.as_ref(),
-        &active,
+        over.as_ref(),
+        &busy,
     ))
 }
 
-pub async fn get_slots(
+pub async fn create_appointment(
     State(config): State<Config>,
     auth: AuthUser,
-    PathParam(vet_id): PathParam<Uuid>,
-    Query(query): Query<FreeSlotsQuery>,
-) -> Result<Json<Vec<TimeRangeResponse>>, AppError> {
-    if auth.role != Role::Owner {
-        return Err(AppError::Forbidden(
-            "this endpoint requires the owner role".to_string(),
-        ));
-    }
-
-    let data_dir = config.data_dir.clone();
-    let free =
-        tokio::task::spawn_blocking(move || get_slots_blocking(&data_dir, vet_id, query.date))
-            .await
-            .map_err(|_| AppError::Internal)??;
-
-    Ok(Json(
-        free.into_iter().map(TimeRangeResponse::from).collect(),
-    ))
-}
-
-/// Read path: a shared lock is enough — it guards against observing this
-/// vet's directory mid-way through a concurrent write, which the write
-/// path's atomic rename doesn't cover for a *multi-file* view (`docs/architecture-internals.md` §1).
-fn get_slots_blocking(
-    data_dir: &Path,
-    vet_id: Uuid,
-    date: Date,
-) -> Result<Vec<TimeRange>, AppError> {
-    let _lock = crate::storage::FileLock::shared(&model::lock_path(data_dir, vet_id))?;
-    free_slots_for(data_dir, vet_id, date, None)
-}
-
-pub async fn book(
-    State(config): State<Config>,
-    auth: AuthUser,
-    Json(req): Json<BookRequest>,
+    Json(req): Json<AppointmentRequest>,
 ) -> Result<(StatusCode, Json<AppointmentResponse>), AppError> {
     if auth.role != Role::Owner {
         return Err(AppError::Forbidden(
@@ -180,19 +176,10 @@ pub async fn book(
         ));
     }
 
-    let duration = req
-        .duration_minutes
-        .unwrap_or(config.appointment_default_duration_min);
-    if duration <= 0 {
-        return Err(AppError::Validation(
-            "duration_minutes must be positive".to_string(),
-        ));
-    }
-
     let data_dir = config.data_dir.clone();
-    let (pet_id, vet_id, time_slot) = (req.pet_id, req.vet_id, req.time_slot);
+    let duration = config.appointment_default_duration_min;
     let appointment = tokio::task::spawn_blocking(move || {
-        book_blocking(&data_dir, auth.id, pet_id, vet_id, time_slot, duration)
+        create_appointment_blocking(&data_dir, auth.id, req, duration)
     })
     .await
     .map_err(|_| AppError::Internal)??;
@@ -200,110 +187,143 @@ pub async fn book(
     Ok((StatusCode::CREATED, Json(appointment.into())))
 }
 
-/// The critical-section write path (`docs/architecture-internals.md` §1): read-check-then-write, all
-/// under one exclusive vet lock.
-fn book_blocking(
+/// The critical-section write path (`docs/architecture-internals.md` §1):
+/// read-check-then-write, all under one exclusive vet lock.
+fn create_appointment_blocking(
     data_dir: &Path,
     user_id: Uuid,
-    pet_id: Uuid,
-    vet_id: Uuid,
-    time_slot: PrimitiveDateTime,
+    req: AppointmentRequest,
     duration: i64,
 ) -> Result<model::Appointment, AppError> {
     let owner_id = resolve_owner_id(data_dir, user_id)?;
-    verify_pet_owned_by(data_dir, pet_id, owner_id)?;
+    let pet = pets::find_by_owner_and_wire_id(data_dir, owner_id, req.pet_id)?
+        .ok_or_else(pet_not_found)?;
+    let location =
+        locations::find_by_wire_id(data_dir, req.location_id)?.ok_or_else(location_not_found)?;
 
-    let _lock = lock::acquire(data_dir, vet_id)?;
+    let _lock = lock::acquire(data_dir, location.vet_id)?;
 
-    let free = free_slots_for(data_dir, vet_id, time_slot.date(), None)?;
-    let requested = TimeRange::new(time_slot, time_slot + Duration::minutes(duration));
-    if !slots::fits_within_free_slots(&free, &requested) {
+    let free = free_slots_for(data_dir, &location, req.starts_at.date(), None)?;
+    let requested = TimeRange::new(req.starts_at, req.starts_at + Duration::minutes(duration));
+    if !locations_slots::fits_within_free_slots(&free, &requested) {
         return Err(AppError::SlotUnavailable);
     }
 
     let appointment = model::Appointment {
         id: Uuid::new_v4(),
-        pet_id,
-        vet_id,
-        time_slot,
+        pet_id: pet.id,
+        vet_id: location.vet_id,
+        location_id: location.id,
+        time_slot: req.starts_at,
         duration_minutes: duration,
         status: AppointmentStatus::Booked,
+        appointment_type: req.appointment_type,
     };
     model::write_appointment(data_dir, &appointment)?;
     log_activity(
         data_dir,
         "appointment_booked",
-        serde_json::json!({"appointment_id": appointment.id, "vet_id": vet_id, "pet_id": pet_id}),
+        serde_json::json!({
+            "appointment_id": appointment.id,
+            "vet_id": location.vet_id,
+            "pet_id": pet.id,
+        }),
     );
 
     Ok(appointment)
 }
 
-/// Resolves which vet's directory holds `appointment_id` and checks the
-/// caller may act on it: a vet only on their own appointments, an owner
-/// only on an appointment for one of their own pets.
+/// Resolves the appointment a wire id names and checks the caller may act
+/// on it: a vet only on their own appointments, an owner only on an
+/// appointment for one of their own pets.
 fn locate_and_authorize(
     data_dir: &Path,
     role: Role,
     user_id: Uuid,
-    appointment_id: Uuid,
-) -> Result<Uuid, AppError> {
+    wire_id: i64,
+) -> Result<model::Appointment, AppError> {
+    let appointment =
+        model::find_by_wire_id(data_dir, wire_id)?.ok_or_else(appointment_not_found)?;
+
     match role {
         Role::Vet => {
             let vet_id = resolve_vet_id(data_dir, user_id)?;
-            if model::read_appointment(data_dir, vet_id, appointment_id)?.is_none() {
+            if appointment.vet_id != vet_id {
                 return Err(appointment_not_found());
             }
-            Ok(vet_id)
         }
         Role::Owner => {
             let owner_id = resolve_owner_id(data_dir, user_id)?;
-            let vet_id = model::find_vet_id_for_appointment(data_dir, appointment_id)?
-                .ok_or_else(appointment_not_found)?;
-            let appointment = model::read_appointment(data_dir, vet_id, appointment_id)?
-                .ok_or_else(appointment_not_found)?;
-            verify_pet_owned_by(data_dir, appointment.pet_id, owner_id)?;
-            Ok(vet_id)
+            let pet =
+                pets::read_pet(data_dir, appointment.pet_id)?.ok_or_else(appointment_not_found)?;
+            if pet.owner_id != owner_id {
+                return Err(appointment_not_found());
+            }
         }
-        Role::Admin => Err(AppError::Forbidden(
-            "this endpoint requires the owner or vet role".to_string(),
-        )),
+        Role::Admin => {
+            return Err(AppError::Forbidden(
+                "this endpoint requires the owner or vet role".to_string(),
+            ));
+        }
     }
+
+    Ok(appointment)
 }
 
-pub async fn cancel(
+pub async fn cancel_owner_appointment(
     State(config): State<Config>,
     auth: AuthUser,
-    PathParam(id): PathParam<Uuid>,
-) -> Result<Json<AppointmentResponse>, AppError> {
-    if auth.role != Role::Owner && auth.role != Role::Vet {
+    PathParam(id): PathParam<i64>,
+) -> Result<StatusCode, AppError> {
+    if auth.role != Role::Owner {
         return Err(AppError::Forbidden(
-            "this endpoint requires the owner or vet role".to_string(),
+            "this endpoint requires the owner role".to_string(),
         ));
     }
+    cancel(config, Role::Owner, auth.id, id).await
+}
 
+pub async fn cancel_vet_appointment(
+    State(config): State<Config>,
+    auth: AuthUser,
+    PathParam(id): PathParam<i64>,
+) -> Result<StatusCode, AppError> {
+    if auth.role != Role::Vet {
+        return Err(AppError::Forbidden(
+            "this endpoint requires the vet role".to_string(),
+        ));
+    }
+    cancel(config, Role::Vet, auth.id, id).await
+}
+
+async fn cancel(
+    config: Config,
+    role: Role,
+    user_id: Uuid,
+    id: i64,
+) -> Result<StatusCode, AppError> {
     let data_dir = config.data_dir.clone();
     let cutoff_hours = config.cancellation_cutoff_hours;
-    let appointment = tokio::task::spawn_blocking(move || {
-        cancel_blocking(&data_dir, auth.role, auth.id, id, cutoff_hours)
+    tokio::task::spawn_blocking(move || {
+        cancel_blocking(&data_dir, role, user_id, id, cutoff_hours)
     })
     .await
     .map_err(|_| AppError::Internal)??;
 
-    Ok(Json(appointment.into()))
+    Ok(StatusCode::OK)
 }
 
 fn cancel_blocking(
     data_dir: &Path,
     role: Role,
     user_id: Uuid,
-    appointment_id: Uuid,
+    wire_id: i64,
     cutoff_hours: i64,
-) -> Result<model::Appointment, AppError> {
-    let vet_id = locate_and_authorize(data_dir, role, user_id, appointment_id)?;
-    let _lock = lock::acquire(data_dir, vet_id)?;
+) -> Result<(), AppError> {
+    let located = locate_and_authorize(data_dir, role, user_id, wire_id)?;
+    let _lock = lock::acquire(data_dir, located.vet_id)?;
 
-    let mut appointment = model::read_appointment(data_dir, vet_id, appointment_id)?
+    let mut appointment = model::read_appointment(data_dir, located.vet_id, located.id)?
         .ok_or_else(appointment_not_found)?;
 
     if !appointment
@@ -326,10 +346,10 @@ fn cancel_blocking(
     log_activity(
         data_dir,
         "appointment_cancelled",
-        serde_json::json!({"appointment_id": appointment.id, "vet_id": vet_id}),
+        serde_json::json!({"appointment_id": appointment.id, "vet_id": appointment.vet_id}),
     );
 
-    Ok(appointment)
+    Ok(())
 }
 
 /// This repo doesn't model per-location timezones — "now"
@@ -340,10 +360,10 @@ fn now_naive() -> PrimitiveDateTime {
     PrimitiveDateTime::new(now.date(), now.time())
 }
 
-pub async fn reschedule(
+pub async fn reschedule_appointment(
     State(config): State<Config>,
     auth: AuthUser,
-    PathParam(id): PathParam<Uuid>,
+    PathParam(id): PathParam<i64>,
     Json(req): Json<RescheduleRequest>,
 ) -> Result<Json<AppointmentResponse>, AppError> {
     if auth.role != Role::Owner {
@@ -352,19 +372,11 @@ pub async fn reschedule(
         ));
     }
 
-    let duration = req
-        .duration_minutes
-        .unwrap_or(config.appointment_default_duration_min);
-    if duration <= 0 {
-        return Err(AppError::Validation(
-            "duration_minutes must be positive".to_string(),
-        ));
-    }
-
     let data_dir = config.data_dir.clone();
-    let time_slot = req.time_slot;
+    let duration = config.appointment_default_duration_min;
+    let starts_at = req.starts_at;
     let appointment = tokio::task::spawn_blocking(move || {
-        reschedule_blocking(&data_dir, auth.id, id, time_slot, duration)
+        reschedule_blocking(&data_dir, auth.id, id, starts_at, duration)
     })
     .await
     .map_err(|_| AppError::Internal)??;
@@ -372,25 +384,29 @@ pub async fn reschedule(
     Ok(Json(appointment.into()))
 }
 
-/// Cancel-old + book-new inside one lock acquisition (`docs/architecture-internals.md` §3) — not two
-/// separate critical sections, so nothing else can slot into the old
-/// appointment's freed time between the two writes.
+/// Cancel-old + book-new inside one lock acquisition
+/// (`docs/architecture-internals.md` §3) — not two separate critical
+/// sections, so nothing else can slot into the old appointment's freed time
+/// between the two writes. The location doesn't change on a reschedule —
+/// the target contract's `RescheduleRequest` carries only `startsAt`.
 fn reschedule_blocking(
     data_dir: &Path,
     user_id: Uuid,
-    appointment_id: Uuid,
-    new_time_slot: PrimitiveDateTime,
+    wire_id: i64,
+    new_starts_at: PrimitiveDateTime,
     duration: i64,
 ) -> Result<model::Appointment, AppError> {
     let owner_id = resolve_owner_id(data_dir, user_id)?;
-    let vet_id = model::find_vet_id_for_appointment(data_dir, appointment_id)?
-        .ok_or_else(appointment_not_found)?;
+    let located = model::find_by_wire_id(data_dir, wire_id)?.ok_or_else(appointment_not_found)?;
+    let pet = pets::read_pet(data_dir, located.pet_id)?.ok_or_else(appointment_not_found)?;
+    if pet.owner_id != owner_id {
+        return Err(appointment_not_found());
+    }
 
-    let _lock = lock::acquire(data_dir, vet_id)?;
+    let _lock = lock::acquire(data_dir, located.vet_id)?;
 
-    let mut old = model::read_appointment(data_dir, vet_id, appointment_id)?
+    let mut old = model::read_appointment(data_dir, located.vet_id, located.id)?
         .ok_or_else(appointment_not_found)?;
-    verify_pet_owned_by(data_dir, old.pet_id, owner_id)?;
 
     if !old.status.can_transition_to(AppointmentStatus::Cancelled) {
         return Err(AppError::InvalidTransition(format!(
@@ -399,11 +415,14 @@ fn reschedule_blocking(
         )));
     }
 
+    let location =
+        locations::read_location(data_dir, old.location_id)?.ok_or_else(location_not_found)?;
+
     // Exclude the appointment being rescheduled from the busy set — it
     // currently occupies time that would otherwise block its own new slot.
-    let free = free_slots_for(data_dir, vet_id, new_time_slot.date(), Some(appointment_id))?;
-    let requested = TimeRange::new(new_time_slot, new_time_slot + Duration::minutes(duration));
-    if !slots::fits_within_free_slots(&free, &requested) {
+    let free = free_slots_for(data_dir, &location, new_starts_at.date(), Some(old.id))?;
+    let requested = TimeRange::new(new_starts_at, new_starts_at + Duration::minutes(duration));
+    if !locations_slots::fits_within_free_slots(&free, &requested) {
         return Err(AppError::SlotUnavailable);
     }
 
@@ -413,55 +432,52 @@ fn reschedule_blocking(
     let new_appointment = model::Appointment {
         id: Uuid::new_v4(),
         pet_id: old.pet_id,
-        vet_id,
-        time_slot: new_time_slot,
+        vet_id: old.vet_id,
+        location_id: old.location_id,
+        time_slot: new_starts_at,
         duration_minutes: duration,
         status: AppointmentStatus::Booked,
+        appointment_type: old.appointment_type,
     };
     model::write_appointment(data_dir, &new_appointment)?;
     log_activity(
         data_dir,
         "appointment_rescheduled",
         serde_json::json!({
-            "old_appointment_id": appointment_id,
+            "old_appointment_id": old.id,
             "new_appointment_id": new_appointment.id,
-            "vet_id": vet_id,
+            "vet_id": old.vet_id,
         }),
     );
 
     Ok(new_appointment)
 }
 
-pub async fn confirm(
-    state: State<Config>,
-    auth: AuthUser,
-    path: PathParam<Uuid>,
-) -> Result<Json<AppointmentResponse>, AppError> {
-    vet_transition(state, auth, path, AppointmentStatus::Confirmed).await
-}
-
-pub async fn complete(
-    state: State<Config>,
-    auth: AuthUser,
-    path: PathParam<Uuid>,
-) -> Result<Json<AppointmentResponse>, AppError> {
-    vet_transition(state, auth, path, AppointmentStatus::Completed).await
-}
-
-pub async fn no_show(
-    state: State<Config>,
-    auth: AuthUser,
-    path: PathParam<Uuid>,
-) -> Result<Json<AppointmentResponse>, AppError> {
-    vet_transition(state, auth, path, AppointmentStatus::NoShow).await
-}
-
-async fn vet_transition(
+pub async fn confirm_appointment(
     State(config): State<Config>,
     auth: AuthUser,
-    PathParam(id): PathParam<Uuid>,
+    PathParam(id): PathParam<i64>,
+) -> Result<StatusCode, AppError> {
+    vet_transition(config, auth, id, AppointmentStatus::Confirmed).await
+}
+
+pub async fn no_show_appointment(
+    State(config): State<Config>,
+    auth: AuthUser,
+    PathParam(id): PathParam<i64>,
+) -> Result<StatusCode, AppError> {
+    vet_transition(config, auth, id, AppointmentStatus::NoShow).await
+}
+
+/// `PUT /api/vet/appointments/{id}/confirm` and `.../no-show` — the target
+/// contract declares both `200 OK` with no response body, unlike
+/// `AppointmentResponse`-returning endpoints elsewhere in this slice.
+async fn vet_transition(
+    config: Config,
+    auth: AuthUser,
+    id: i64,
     next: AppointmentStatus,
-) -> Result<Json<AppointmentResponse>, AppError> {
+) -> Result<StatusCode, AppError> {
     if auth.role != Role::Vet {
         return Err(AppError::Forbidden(
             "this endpoint requires the vet role".to_string(),
@@ -469,25 +485,29 @@ async fn vet_transition(
     }
 
     let data_dir = config.data_dir.clone();
-    let appointment =
-        tokio::task::spawn_blocking(move || vet_transition_blocking(&data_dir, auth.id, id, next))
-            .await
-            .map_err(|_| AppError::Internal)??;
+    tokio::task::spawn_blocking(move || vet_transition_blocking(&data_dir, auth.id, id, next))
+        .await
+        .map_err(|_| AppError::Internal)??;
 
-    Ok(Json(appointment.into()))
+    Ok(StatusCode::OK)
 }
 
 fn vet_transition_blocking(
     data_dir: &Path,
     user_id: Uuid,
-    appointment_id: Uuid,
+    wire_id: i64,
     next: AppointmentStatus,
-) -> Result<model::Appointment, AppError> {
+) -> Result<(), AppError> {
     let vet_id = resolve_vet_id(data_dir, user_id)?;
+    let located = model::find_by_wire_id(data_dir, wire_id)?.ok_or_else(appointment_not_found)?;
+    if located.vet_id != vet_id {
+        return Err(appointment_not_found());
+    }
+
     let _lock = lock::acquire(data_dir, vet_id)?;
 
-    let mut appointment = model::read_appointment(data_dir, vet_id, appointment_id)?
-        .ok_or_else(appointment_not_found)?;
+    let mut appointment =
+        model::read_appointment(data_dir, vet_id, located.id)?.ok_or_else(appointment_not_found)?;
 
     if !appointment.status.can_transition_to(next) {
         return Err(AppError::InvalidTransition(format!(
@@ -500,9 +520,9 @@ fn vet_transition_blocking(
     model::write_appointment(data_dir, &appointment)?;
     let event_type = match next {
         AppointmentStatus::Confirmed => "appointment_confirmed",
-        AppointmentStatus::Completed => "appointment_completed",
         AppointmentStatus::NoShow => "appointment_no_show",
-        // `can_transition_to` above already rejects any other target.
+        // `can_transition_to` above already rejects any other target this
+        // function is called with.
         _ => "appointment_status_changed",
     };
     log_activity(
@@ -511,16 +531,86 @@ fn vet_transition_blocking(
         serde_json::json!({"appointment_id": appointment.id, "vet_id": vet_id}),
     );
 
+    Ok(())
+}
+
+/// `POST /api/appointments/{id}/complete` — deliberately left at its old,
+/// unprefixed path and still `vet`-authorized like the transitions above.
+/// The target contract has no `complete` endpoint at all; completing an
+/// appointment is meant to happen implicitly via the vet-visit write once
+/// `visits` moves onto the target contract. Until then, `visits::handlers`
+/// still requires an appointment already be `Completed` before it'll record
+/// a visit, so this stays reachable rather than making that unreachable.
+pub async fn complete(
+    State(config): State<Config>,
+    auth: AuthUser,
+    PathParam(id): PathParam<i64>,
+) -> Result<Json<AppointmentResponse>, AppError> {
+    if auth.role != Role::Vet {
+        return Err(AppError::Forbidden(
+            "this endpoint requires the vet role".to_string(),
+        ));
+    }
+
+    let data_dir = config.data_dir.clone();
+    let appointment =
+        tokio::task::spawn_blocking(move || complete_blocking(&data_dir, auth.id, id))
+            .await
+            .map_err(|_| AppError::Internal)??;
+
+    Ok(Json(appointment.into()))
+}
+
+fn complete_blocking(
+    data_dir: &Path,
+    user_id: Uuid,
+    wire_id: i64,
+) -> Result<model::Appointment, AppError> {
+    let vet_id = resolve_vet_id(data_dir, user_id)?;
+    let located = model::find_by_wire_id(data_dir, wire_id)?.ok_or_else(appointment_not_found)?;
+    if located.vet_id != vet_id {
+        return Err(appointment_not_found());
+    }
+
+    let _lock = lock::acquire(data_dir, vet_id)?;
+
+    let mut appointment =
+        model::read_appointment(data_dir, vet_id, located.id)?.ok_or_else(appointment_not_found)?;
+
+    if !appointment
+        .status
+        .can_transition_to(AppointmentStatus::Completed)
+    {
+        return Err(AppError::InvalidTransition(format!(
+            "cannot move {:?} to Completed",
+            appointment.status
+        )));
+    }
+
+    appointment.status = AppointmentStatus::Completed;
+    model::write_appointment(data_dir, &appointment)?;
+    log_activity(
+        data_dir,
+        "appointment_completed",
+        serde_json::json!({"appointment_id": appointment.id, "vet_id": vet_id}),
+    );
+
     Ok(appointment)
 }
 
-pub async fn list_mine(
+pub async fn list_owner_appointments(
     State(config): State<Config>,
     auth: AuthUser,
 ) -> Result<Json<Vec<AppointmentResponse>>, AppError> {
+    if auth.role != Role::Owner {
+        return Err(AppError::Forbidden(
+            "this endpoint requires the owner role".to_string(),
+        ));
+    }
+
     let data_dir = config.data_dir.clone();
     let appointments =
-        tokio::task::spawn_blocking(move || list_mine_blocking(&data_dir, auth.role, auth.id))
+        tokio::task::spawn_blocking(move || list_owner_appointments_blocking(&data_dir, auth.id))
             .await
             .map_err(|_| AppError::Internal)??;
 
@@ -532,32 +622,69 @@ pub async fn list_mine(
     ))
 }
 
-fn list_mine_blocking(
+fn list_owner_appointments_blocking(
     data_dir: &Path,
-    role: Role,
     user_id: Uuid,
 ) -> Result<Vec<model::Appointment>, AppError> {
-    match role {
-        Role::Vet => {
-            let vet_id = resolve_vet_id(data_dir, user_id)?;
-            // Same read-path rationale as `get_slots_blocking`.
-            let _lock = crate::storage::FileLock::shared(&model::lock_path(data_dir, vet_id))?;
-            Ok(model::read_all_for_vet(data_dir, vet_id)?)
-        }
-        Role::Owner => {
-            let owner_id = resolve_owner_id(data_dir, user_id)?;
-            let pet_ids: std::collections::HashSet<Uuid> =
-                pets::list_pets_for_owner(data_dir, owner_id)?
-                    .into_iter()
-                    .map(|p| p.id)
-                    .collect();
-            Ok(model::read_all(data_dir)?
-                .into_iter()
-                .filter(|a| pet_ids.contains(&a.pet_id))
-                .collect())
-        }
-        Role::Admin => Err(AppError::Forbidden(
-            "this endpoint requires the owner or vet role".to_string(),
-        )),
+    let owner_id = resolve_owner_id(data_dir, user_id)?;
+    let pet_ids: std::collections::HashSet<Uuid> = pets::list_pets_for_owner(data_dir, owner_id)?
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    Ok(model::read_all(data_dir)?
+        .into_iter()
+        .filter(|a| pet_ids.contains(&a.pet_id))
+        .collect())
+}
+
+pub async fn list_vet_appointments(
+    State(config): State<Config>,
+    auth: AuthUser,
+) -> Result<Json<Vec<VetAppointmentResponse>>, AppError> {
+    if auth.role != Role::Vet {
+        return Err(AppError::Forbidden(
+            "this endpoint requires the vet role".to_string(),
+        ));
     }
+
+    let data_dir = config.data_dir.clone();
+    let responses =
+        tokio::task::spawn_blocking(move || list_vet_appointments_blocking(&data_dir, auth.id))
+            .await
+            .map_err(|_| AppError::Internal)??;
+
+    Ok(Json(responses))
+}
+
+fn list_vet_appointments_blocking(
+    data_dir: &Path,
+    user_id: Uuid,
+) -> Result<Vec<VetAppointmentResponse>, AppError> {
+    let vet_id = resolve_vet_id(data_dir, user_id)?;
+    // Same read-path rationale as everywhere else a shared lock guards a
+    // multi-file view (`docs/architecture-internals.md` §1).
+    let _lock = crate::storage::FileLock::shared(&model::lock_path(data_dir, vet_id))?;
+
+    model::read_all_for_vet(data_dir, vet_id)?
+        .into_iter()
+        .map(|a| to_vet_appointment_response(data_dir, a))
+        .collect()
+}
+
+fn to_vet_appointment_response(
+    data_dir: &Path,
+    a: model::Appointment,
+) -> Result<VetAppointmentResponse, AppError> {
+    let pet = pets::read_pet(data_dir, a.pet_id)?.ok_or_else(appointment_not_found)?;
+    let owner_username = resolve_owner_username(data_dir, pet.owner_id)?;
+
+    Ok(VetAppointmentResponse {
+        id: domain::wire_id(a.id),
+        pet_id: domain::wire_id(pet.id),
+        pet_name: pet.name,
+        owner_username,
+        starts_at: a.time_slot,
+        status: a.status,
+        appointment_type: a.appointment_type,
+    })
 }

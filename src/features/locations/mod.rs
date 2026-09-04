@@ -6,7 +6,7 @@
 
 mod handlers;
 pub mod model;
-mod slots;
+pub mod slots;
 #[cfg(test)]
 mod tests;
 

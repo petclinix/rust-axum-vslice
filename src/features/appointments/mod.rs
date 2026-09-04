@@ -4,28 +4,44 @@
 mod handlers;
 mod lock;
 pub mod model;
-pub mod slots;
 #[cfg(test)]
 mod tests;
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 
 use crate::config::Config;
 
 pub fn router() -> Router<Config> {
     Router::new()
-        .route("/api/vets/{id}/slots", get(handlers::get_slots))
         .route(
-            "/api/appointments",
-            post(handlers::book).get(handlers::list_mine),
+            "/api/owner/appointments",
+            post(handlers::create_appointment).get(handlers::list_owner_appointments),
         )
-        .route("/api/appointments/{id}/cancel", post(handlers::cancel))
         .route(
-            "/api/appointments/{id}/reschedule",
-            post(handlers::reschedule),
+            "/api/owner/appointments/{id}",
+            delete(handlers::cancel_owner_appointment),
         )
-        .route("/api/appointments/{id}/confirm", post(handlers::confirm))
+        .route(
+            "/api/owner/appointments/{id}/reschedule",
+            put(handlers::reschedule_appointment),
+        )
+        .route(
+            "/api/vet/appointments",
+            get(handlers::list_vet_appointments),
+        )
+        .route(
+            "/api/vet/appointments/{id}",
+            delete(handlers::cancel_vet_appointment),
+        )
+        .route(
+            "/api/vet/appointments/{id}/confirm",
+            put(handlers::confirm_appointment),
+        )
+        .route(
+            "/api/vet/appointments/{id}/no-show",
+            put(handlers::no_show_appointment),
+        )
+        // Off-spec, temporary — see `handlers::complete`'s doc comment.
         .route("/api/appointments/{id}/complete", post(handlers::complete))
-        .route("/api/appointments/{id}/no-show", post(handlers::no_show))
 }

@@ -66,7 +66,7 @@ fn pet_not_found() -> AppError {
 pub async fn record_visit(
     State(config): State<Config>,
     auth: AuthUser,
-    PathParam(appointment_id): PathParam<Uuid>,
+    PathParam(appointment_id): PathParam<i64>,
     Json(req): Json<RecordVisitRequest>,
 ) -> Result<(StatusCode, Json<VisitResponse>), AppError> {
     if auth.role != Role::Vet {
@@ -96,14 +96,18 @@ pub async fn record_visit(
 fn record_visit_blocking(
     data_dir: &Path,
     user_id: Uuid,
-    appointment_id: Uuid,
+    wire_id: i64,
     req: RecordVisitRequest,
 ) -> Result<model::Visit, AppError> {
     let vet_id = resolve_vet_id(data_dir, user_id)?;
-    let appointment = appointments::read_appointment(data_dir, vet_id, appointment_id)?
+    let located = appointments::find_by_wire_id(data_dir, wire_id)?
         .ok_or_else(|| AppError::NotFound("appointment not found".to_string()))?;
+    if located.vet_id != vet_id {
+        return Err(AppError::NotFound("appointment not found".to_string()));
+    }
+    let appointment_id = located.id;
 
-    if appointment.status != AppointmentStatus::Completed {
+    if located.status != AppointmentStatus::Completed {
         return Err(AppError::Conflict(
             "a visit can only be recorded on a completed appointment".to_string(),
         ));
@@ -130,7 +134,7 @@ fn record_visit_blocking(
 pub async fn list_for_pet(
     State(config): State<Config>,
     auth: AuthUser,
-    PathParam(pet_id): PathParam<Uuid>,
+    PathParam(pet_id): PathParam<i64>,
 ) -> Result<Json<Vec<VisitResponse>>, AppError> {
     if auth.role != Role::Owner {
         return Err(AppError::Forbidden(
@@ -150,17 +154,15 @@ pub async fn list_for_pet(
 fn list_for_pet_blocking(
     data_dir: &Path,
     user_id: Uuid,
-    pet_id: Uuid,
+    wire_id: i64,
 ) -> Result<Vec<model::Visit>, AppError> {
     let owner_id = resolve_owner_id(data_dir, user_id)?;
-    let pet = pets::read_pet(data_dir, pet_id)?.ok_or_else(pet_not_found)?;
-    if pet.owner_id != owner_id {
-        return Err(pet_not_found());
-    }
+    let pet =
+        pets::find_by_owner_and_wire_id(data_dir, owner_id, wire_id)?.ok_or_else(pet_not_found)?;
 
     let appointment_ids: Vec<Uuid> = appointments::read_all(data_dir)?
         .into_iter()
-        .filter(|a| a.pet_id == pet_id)
+        .filter(|a| a.pet_id == pet.id)
         .map(|a| a.id)
         .collect();
 

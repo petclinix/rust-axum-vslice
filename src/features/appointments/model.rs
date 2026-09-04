@@ -1,6 +1,12 @@
 //! Appointment records and their file I/O. Partitioned by
-//! `vet_id`, exactly like `availability` — a booking attempt only ever
-//! locks and scans one vet's directory (`docs/architecture-internals.md` §1).
+//! `vet_id`, exactly like the old `availability` slice was — a booking
+//! attempt only ever locks and scans one vet's directory
+//! (`docs/architecture-internals.md` §1). Each appointment also carries the
+//! `location_id` it was booked at (the target contract's
+//! `Appointment.locationId`), but conflict-checking and the exclusive lock
+//! both stay vet-scoped, not location-scoped — a vet has one calendar
+//! across every location they run, not a separate one per location (see
+//! `locations::slots`'s doc comment).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -9,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use time::{Duration, PrimitiveDateTime};
 use uuid::Uuid;
 
-use crate::domain::{AppointmentStatus, TimeRange};
+use crate::domain::{self, AppointmentStatus, AppointmentType, TimeRange};
 use crate::storage;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,9 +23,11 @@ pub struct Appointment {
     pub id: Uuid,
     pub pet_id: Uuid,
     pub vet_id: Uuid,
+    pub location_id: Uuid,
     pub time_slot: PrimitiveDateTime,
     pub duration_minutes: i64,
     pub status: AppointmentStatus,
+    pub appointment_type: AppointmentType,
 }
 
 impl Appointment {
@@ -86,46 +94,12 @@ pub fn read_active_for_vet(data_dir: &Path, vet_id: Uuid) -> io::Result<Vec<Appo
         .collect())
 }
 
-/// Locates which vet's directory holds `appointment_id`, for the paths
-/// (owner-initiated cancel/reschedule) that only have the appointment id,
-/// not the vet id — an owner may have booked with any vet. This checks one
-/// filename per vet directory rather than parsing every appointment, so
-/// it's a targeted existence check, not the kind of whole-`data/` scan
-/// `docs/architecture.md`'s data-layout section warns against; the on-disk layout has no secondary index from
-/// appointment id to vet id, so a bounded scan across vet directories is
-/// the only way to resolve one without it. `vet_id` never changes for an
-/// appointment once created, so this is safe to do before taking any lock.
-pub fn find_vet_id_for_appointment(
-    data_dir: &Path,
-    appointment_id: Uuid,
-) -> io::Result<Option<Uuid>> {
-    let root = appointments_root(data_dir);
-    let entries = match std::fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-
-    for entry in entries {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let Ok(vet_id) = entry.file_name().to_string_lossy().parse::<Uuid>() else {
-            continue;
-        };
-        if entry.path().join(format!("{appointment_id}.json")).exists() {
-            return Ok(Some(vet_id));
-        }
-    }
-    Ok(None)
-}
-
-/// Every appointment across every vet — used only by the owner-scoped "my
-/// appointments" listing, which has no single vet to scope to (an owner's
-/// pets may have appointments with several vets). Same rationale as admin
-/// stats (`docs/architecture.md`'s data-layout section): a global scan is unavoidable when the query itself
-/// is global, not vet-scoped.
+/// Every appointment across every vet — used by the owner-scoped "my
+/// appointments" listing (an owner's pets may have appointments with
+/// several vets) and by wire-id resolution, both of which have no single
+/// vet to scope to. Same rationale as admin stats
+/// (`docs/architecture.md`'s data-layout section): a global scan is
+/// unavoidable when the query itself is global, not vet-scoped.
 pub fn read_all(data_dir: &Path) -> io::Result<Vec<Appointment>> {
     let root = appointments_root(data_dir);
     let entries = match std::fs::read_dir(&root) {
@@ -145,6 +119,19 @@ pub fn read_all(data_dir: &Path) -> io::Result<Vec<Appointment>> {
     Ok(all)
 }
 
+/// Resolves a wire id (`domain::wire_id`) back to the `Appointment` it was
+/// derived from — a global scan, same trade-off as `read_all`, since the
+/// on-disk layout has no secondary index from wire id (or even real id) to
+/// vet id. Used by both the owner- and vet-facing routes to locate an
+/// appointment from a path param before taking the vet's lock and
+/// re-reading it fresh under that lock (avoids trusting a pre-lock read for
+/// the write itself).
+pub fn find_by_wire_id(data_dir: &Path, wire_id: i64) -> io::Result<Option<Appointment>> {
+    Ok(read_all(data_dir)?
+        .into_iter()
+        .find(|a| domain::wire_id(a.id) == wire_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,9 +142,11 @@ mod tests {
             id: Uuid::new_v4(),
             pet_id: Uuid::new_v4(),
             vet_id,
+            location_id: Uuid::new_v4(),
             time_slot: datetime!(2026-09-10 9:00),
             duration_minutes: 30,
             status,
+            appointment_type: AppointmentType::Checkup,
         }
     }
 
@@ -212,35 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn find_vet_id_for_appointment_locates_the_right_vet() {
-        let dir = tempfile::tempdir().unwrap();
-        let vet_a = Uuid::new_v4();
-        let vet_b = Uuid::new_v4();
-        let appointment = sample_appointment(vet_b, AppointmentStatus::Booked);
-        write_appointment(
-            dir.path(),
-            &sample_appointment(vet_a, AppointmentStatus::Booked),
-        )
-        .unwrap();
-        write_appointment(dir.path(), &appointment).unwrap();
-
-        assert_eq!(
-            find_vet_id_for_appointment(dir.path(), appointment.id).unwrap(),
-            Some(vet_b)
-        );
-    }
-
-    #[test]
-    fn find_vet_id_for_appointment_missing_returns_none() {
-        let dir = tempfile::tempdir().unwrap();
-
-        assert_eq!(
-            find_vet_id_for_appointment(dir.path(), Uuid::new_v4()).unwrap(),
-            None
-        );
-    }
-
-    #[test]
     fn read_all_spans_every_vet() {
         let dir = tempfile::tempdir().unwrap();
         write_appointment(
@@ -255,5 +215,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(read_all(dir.path()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn find_by_wire_id_matches_and_no_match_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let appointment = sample_appointment(Uuid::new_v4(), AppointmentStatus::Booked);
+        write_appointment(dir.path(), &appointment).unwrap();
+
+        assert_eq!(
+            find_by_wire_id(dir.path(), domain::wire_id(appointment.id)).unwrap(),
+            Some(appointment)
+        );
+        assert_eq!(find_by_wire_id(dir.path(), 123456).unwrap(), None);
     }
 }

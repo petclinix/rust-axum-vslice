@@ -533,9 +533,11 @@ async fn available_slots_reflects_weekly_periods_minus_a_booked_appointment() {
             id: Uuid::new_v4(),
             pet_id: Uuid::new_v4(),
             vet_id: vet.vet_id.unwrap(),
+            location_id: Uuid::new_v4(),
             time_slot: time::macros::datetime!(2026-09-07 10:00),
             duration_minutes: 30,
             status: AppointmentStatus::Booked,
+            appointment_type: crate::domain::AppointmentType::Checkup,
         },
     )
     .unwrap();
